@@ -172,9 +172,6 @@ idea-autopsy/
 │   ├── consumer-app-pitch/       # full loop → Proceed with caution
 │   ├── b2b-saas-pivot/           # → Pivot
 │   └── unsupported-tam-skip/     # → Skip (no plausible flip)
-├── scripts/
-│   ├── check-drift.py            # mirror-sync check (maintainers)
-│   └── README.md
 └── skills/
     ├── stress-test-idea/SKILL.md
     ├── iterate-to-v2/SKILL.md
@@ -186,16 +183,7 @@ idea-autopsy/
 
 The agent definitions themselves are distributed separately from this plugin (they live in the maintainer's agent roster). If you hit the missing-agent error, obtain or author the two `.md` files (standard Claude Code agent format: frontmatter `name`/`description`/`tools` + persona body) and park them at `~/.claude/agents-parked/`. This repo's history also carries them — they shipped inside `idea-autopsy` up to the commit that introduced this section.
 
-## Mirror sync (maintainers)
-
-The source of truth for this plugin is this repo (`z0rd0n88/ClaudesMods/idea-autopsy/`). When installed via the marketplace, a copy lives under `~/.claude/plugins/cache/claudes-mods/idea-autopsy/<version>/` (or wherever your install root puts it). The drift check covers `plugin.json`, `commands/`, `skills/`, and `examples/`. To verify the source and the install haven't drifted, run:
-
-```bash
-python3 scripts/check-drift.py <install-path>
-```
-
-Exit code 0 = no drift; 1 = drift detected (script prints what's different). Run before tagging a release or after merging upstream changes. See [`scripts/README.md`](./scripts/README.md) for details.
 
 ## License
 
-[MIT](../../LICENSE).
+[MIT](./LICENSE).
