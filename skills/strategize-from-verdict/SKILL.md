@@ -81,8 +81,8 @@ From the verdict and its findings, capture:
 Dispatch the `product-strategist` agent (it carries the positioning/GTM/sequencing frameworks). Resolve it in this order:
 
 1. A registered `subagent_type: product-strategist` (or namespaced form) — dispatch it directly.
-2. An agent file named `product-strategist.md` in the project's `.claude/agents-parked/` or the user scope `~/.claude/agents-parked/` — dispatch via the **paste method**: a `general-purpose` subagent whose prompt STARTS with the full file body below the frontmatter (persona preserved), followed by the inline prompt below.
-3. **Neither found → STOP with an error.** Do not silently degrade to a bare `general-purpose` prompt. Tell the user: `Required agent 'product-strategist' not found — park it at ~/.claude/agents-parked/product-strategist.md (or activate it in .claude/agents/) and re-run.`
+2. An agent file named `product-strategist.md` in the plugin's `agents/` directory — dispatch via the **paste method**: a `general-purpose` subagent whose prompt STARTS with the full file body below the frontmatter (persona preserved), followed by the inline prompt below.
+3. **Neither found → STOP with an error.** Do not silently degrade to a bare `general-purpose` prompt. Tell the user: `Required agent 'product-strategist' not found — park it at agents/product-strategist.md (or activate it in .claude/agents/) and re-run.`
 
 Give it: the doc (or the extracted assets + thesis), the verdict, the Criticals to dodge, and the team's assets. Ask it to return **2–3 ranked alternative theses**, each with:
 
@@ -97,7 +97,7 @@ Rank the theses by (asset-fit × how cleanly they dodge the Criticals × wedge r
 
 ### Step 3 — Validate the theses (`--validate`, optional — OFF by default)
 
-Only if the user passed `--validate`. Dispatch the `project-idea-validator` agent (WebFetch/WebSearch-capable), resolved the same way as Step 2: registered `subagent_type` first, else paste the body of `project-idea-validator.md` from the project's `.claude/agents-parked/` or `~/.claude/agents-parked/` into a `general-purpose` prompt followed by the inline web prompt, else **STOP with an error** naming the missing agent and the expected path. Use it to web-check each proposed thesis: does the target market exist, who are the real competitors, is the wedge occupied. Fold results in: a thesis whose market is already saturated or whose "white space" is occupied gets demoted or dropped, with the source noted.
+Only if the user passed `--validate`. Dispatch the `project-idea-validator` agent (WebFetch/WebSearch-capable), resolved the same way as Step 2: registered `subagent_type` first, else paste the body of `project-idea-validator.md` from the plugin's `agents/` directory into a `general-purpose` prompt followed by the inline web prompt, else **STOP with an error** naming the missing agent and the expected path. Use it to web-check each proposed thesis: does the target market exist, who are the real competitors, is the wedge occupied. Fold results in: a thesis whose market is already saturated or whose "white space" is occupied gets demoted or dropped, with the source noted.
 
 ### Step 4 — Synthesize and write to state
 
@@ -167,8 +167,8 @@ Draft the recommended path as a v[N+1] doc and run `stress-test-idea` or `evalua
 - **Verdict was Invest:** skip pivot alternatives; produce only a go-to-market sequencing pass (Now/Next/Later + the first validation artifact).
 - **Verdict was Skip with "no plausible flip-condition exists":** be honest — if the space is genuinely dead for this team, say the strongest move may be to redeploy the assets elsewhere, and name where, rather than manufacture a thesis.
 - **Team assets are thin in the doc:** note that strategy quality is capped by the asset inventory; ask once for the real assets if the user is present, else proceed with what is stated and flag the gap.
-- **Agent not registered at runtime:** expected — the agents are kept parked (user scope `~/.claude/agents-parked/` or project `.claude/agents-parked/`) so their descriptions never load into session context. The paste method (agent body at the top of a `general-purpose` prompt) is the normal dispatch path; persona and functionality are both preserved.
-- **Agent file not found anywhere:** hard error, not degradation — the skill must stop and tell the user which agent is missing and to park it at `~/.claude/agents-parked/<name>.md`. This plugin does not bundle the agent files.
+- **Agent not registered at runtime:** expected — the agents are kept parked (this plugin's `agents/` directory) so their descriptions never load into session context. The paste method (agent body at the top of a `general-purpose` prompt) is the normal dispatch path; persona and functionality are both preserved.
+- **Agent file not found anywhere:** hard error, not degradation — the skill must stop and tell the user which agent is missing and to park it at `agents/<name>.md`. This plugin does not bundle the agent files.
 
 ## What not to do
 
