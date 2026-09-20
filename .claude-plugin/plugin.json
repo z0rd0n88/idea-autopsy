@@ -1,0 +1,20 @@
+{
+  "name": "idea-autopsy",
+  "description": "A four-skill plugin for honest, decision-shaped idea review: stress-test-idea, iterate-to-v2, evaluate-proposal-harsh, strategize-from-verdict.",
+  "version": "1.0.0",
+  "author": {
+    "name": "z0rd0n88"
+  },
+  "homepage": "https://github.com/z0rd0n88/idea-autopsy",
+  "repository": "https://github.com/z0rd0n88/idea-autopsy",
+  "license": "MIT",
+  "keywords": [
+    "idea", "autopsy", "review", "proposal", "stress-test", "evaluate"
+  ],
+  "skills": [
+    "./skills"
+  ],
+  "commands": [
+    "./commands"
+  ]
+}
