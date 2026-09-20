@@ -1,6 +1,33 @@
 {
   "name": "idea-autopsy",
-  "version": "1.0.0",
-  "description": "A four-skill plugin for honest, decision-shaped idea review.",
-  "url": "https://github.com/z0rd0n88/idea-autopsy"
+  "owner": {
+    "name": "z0rd0n88",
+    "url": "https://github.com/z0rd0n88"
+  },
+  "metadata": {
+    "description": "A four-skill plugin for honest, decision-shaped idea review.",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "idea-autopsy",
+      "source": "./",
+      "description": "A four-skill plugin for honest, decision-shaped idea review: stress-test-idea, iterate-to-v2, evaluate-proposal-harsh, strategize-from-verdict.",
+      "version": "1.0.0",
+      "author": {
+        "name": "z0rd0n88"
+      },
+      "category": "productivity",
+      "keywords": [
+        "idea",
+        "autopsy",
+        "review",
+        "proposal",
+        "stress-test",
+        "evaluate",
+        "critique",
+        "verdict"
+      ]
+    }
+  ]
 }
