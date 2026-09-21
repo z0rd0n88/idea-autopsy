@@ -117,7 +117,7 @@ Note in working memory (do not show the user):
 - Any numbers
 - Investment context the user supplied inline
 
-**Self-consistency check before dispatch.** If the doc carries both a thresholds or constants table and a fixture, worked example, or test-vector table, cross-check every fixture row against every threshold before spending reviewers. A rulebook whose own test table violates its own minimum is a mechanical find, not a panel find, and it will otherwise be the headline Critical. Treat a self-authored conformance table as untested input, not evidence.
+**Self-consistency check before dispatch.** If the doc carries both a thresholds or constants table and a fixture, worked example, or test-vector table, cross-check every fixture row against every threshold before spending reviewers. A rulebook whose own test table violates its own minimum is a mechanical find, not a panel find, and it will otherwise be the headline Critical. Treat a self-authored conformance table as untested input, not evidence. Run `python3 scripts/check_fixtures.py <doc>` before dispatch and hand the user any violation it reports as a finding, rather than spending reviewers on it.
 
 Do not summarize the doc back. The user wrote it.
 
