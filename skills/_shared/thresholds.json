@@ -1,0 +1,6 @@
+{
+  "review_refuse_words": 15000,
+  "review_warn_words": 5000,
+  "iterate_warn_combined": 8000,
+  "iterate_refuse_combined": 20000
+}

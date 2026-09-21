@@ -159,6 +159,8 @@ Read v1 and the critique. Apply the doc-size guard to the **combined word count*
 | 8000 – 20000 | Warn; offer to focus only on Consensus/Critical findings to keep the change plan focused |
 | > 20000 | Refuse; ask for excerpt of doc or summary of critique |
 
+The guard is mechanical: `python3 skills/_shared/wordcount.py check --file <doc> --combined <critique>` prints both counts and the verdict against the shared thresholds in `skills/_shared/thresholds.json`, and every snapshot written to `./.autopsy/<slug>/` is recorded with `python3 skills/_shared/wordcount.py record --slug <slug> --version <vN> --file <doc>` so the next stage reads the number from `state.json` instead of recounting.
+
 The plan's output has a ceiling too: the next stage (`evaluate-proposal-harsh` or `stress-test-idea`) refuses above 15,000 words. Note v1's word count now; a plan whose net effect would push v2 over that line has failed its own change-vs-hedge rule, because a doc that grew is a doc that was patched.
 
 Note in working memory:
@@ -200,6 +202,8 @@ If a finding could be addressed by any of these, default to the most disruptive 
 Use the output format below. Write the rendered plan to `./.autopsy/<slug>/v<N>-change-plan.md`. Update state.json with the new artifact and a history entry.
 
 Before writing, total the plan: words cut minus words added, against v1's count. If the estimate exceeds 15,000 words, report it in the plan header as a failure and cut further — the next stage will refuse the result. The plan also states its **landing condition**: what gets written back to the source path when v2 survives review, and what happens to the live document's header if it does not (a superseded note, or nothing). Name any intermediate the loop produced (excerpts, superseded versions) as prunable, or the repo keeps three copies of a document whose verdict was "don't build this".
+
+Record the v2 snapshot with `python3 skills/_shared/wordcount.py record --slug <slug> --version <vN+1> --file <v2>` when it is written: the script checks it against the shared thresholds in `skills/_shared/thresholds.json` and fails there, so a v2 that outgrew the next stage's refusal limit is caught at write time rather than one stage later.
 
 ## Output format
 

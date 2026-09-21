@@ -110,6 +110,8 @@ Read the full document. Count words. Apply the doc-size guard:
 | 5000 – 15000 | Warn the user once: "doc is N words; reviewer cost will be substantial. Proceed with all three reviewers, or reduce to two (A + B)?" Default to all three if no answer in the next message |
 | > 15000 | Refuse: ask for an excerpt (the load-bearing sections only) or run chapter-by-chapter |
 
+The guard is mechanical: `python3 skills/_shared/wordcount.py check --file <doc>` prints the count and the verdict against the shared thresholds in `skills/_shared/thresholds.json`, and every snapshot written to `./.autopsy/<slug>/` is recorded with `python3 skills/_shared/wordcount.py record --slug <slug> --version <vN> --file <doc>` so the next stage reads the number from `state.json` instead of recounting.
+
 Note in working memory (do not show the user):
 - Central thesis
 - Target user or market
@@ -163,6 +165,7 @@ Write the rendered synthesis to `./.autopsy/<slug>/v<N>-stress-test.md`. Update 
   "slug": "<slug>",
   "doc_path": "<original path or 'pasted'>",
   "current_version": "v1",
+  "word_counts": { "v1": 4200 },
   "artifacts": {
     "v1": "./.autopsy/<slug>/v1.md",
     "v1-stress-test": "./.autopsy/<slug>/v1-stress-test.md"

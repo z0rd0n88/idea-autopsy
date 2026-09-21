@@ -101,6 +101,8 @@ Read the full document. Count words. Apply the doc-size guard:
 | 5000 – 15000 | Warn: "doc is N words; reviewer cost will be substantial. Proceed with all four, or reduce to three (drop Feasibility OR Risk depending on signal)?" Default to all four if no answer |
 | > 15000 | Refuse; ask for excerpt or chaptered re-invocation |
 
+The guard is mechanical: `python3 skills/_shared/wordcount.py check --file <doc>` prints the count and the verdict against the shared thresholds in `skills/_shared/thresholds.json`, and every snapshot written to `./.autopsy/<slug>/` is recorded with `python3 skills/_shared/wordcount.py record --slug <slug> --version <vN> --file <doc>` so the next stage reads the number from `state.json` instead of recounting.
+
 Over the guard there are two honest options: review section-by-section (one panel per chapter, verdict per chapter), or decline. Do not build a trimmed derivative and label its verdict a verdict on the original. If the user supplies an excerpt, the verdict names the excerpt and lists what was dropped, and the excerpt is a tracked artifact the user must regenerate after every edit to the source.
 
 Capture in working notes (do not show the user):
