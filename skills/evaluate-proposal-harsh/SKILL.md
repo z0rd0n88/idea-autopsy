@@ -83,7 +83,7 @@ Ensure `./.autopsy/<slug>/` exists. **It is committed, never gitignored** — th
 
 If `state.json` is present, read it — note prior critiques, the current version, and **`investment_context`**. Reviewers are dispatched in parallel and cannot be corrected after fan-out, so context the user supplied on an earlier run must be reloaded here, not re-assumed as "generic founder". The verdict can reference prior iteration history ("v1 had 3 Criticals; v2 resolved 2, introduced 1 new") which sharpens the flip-condition.
 
-**Re-run stop check (do this before Step 2).** If a prior verdict exists for this version, name the Critical that drove it and compare it against every edit made since. If no edit touched the text that Critical cites, do not dispatch the panel: say in chat that the blocker is an unmade decision (the doc still has no number, no legal route, no custody model, or whatever the Critical names), state what the founder must decide, and stop. Another run cannot move a verdict whose driver was never in scope of an edit.
+**Re-run stop check (do this before Step 2).** If a prior verdict exists for this version, name the Critical that drove it and compare it against every edit made since. If no edit touched the text that Critical cites, do not dispatch the panel: say in chat that the blocker is an unmade decision (the doc still has no number, no legal route, no custody model, or whatever the Critical names), state what the founder must decide, and stop. Another run cannot move a verdict whose driver was never in scope of an edit. Run `python3 scripts/loop_check.py --slug <slug> --doc <path>` from the repo root and obey a non-zero exit: 2 means stop here and name the decision, 3 means the rule has already been overridden on this slug and you report the rule's output unchanged this run.
 
 Determine the version label:
 - If state.json doesn't exist → `v1`.
@@ -130,6 +130,24 @@ Once all four reviewers return, build the per-issue multiplicity table, apply th
 ### Step 4 — Write output to state
 
 Write the rendered evaluation to `./.autopsy/<slug>/v<N>-verdict.md`. Update `state.json` with the new artifact and a history entry.
+
+The verdict block in `state.json` records four fields **every run** — the next
+run's stop check reads them and has nothing to work with if they are missing:
+
+```json
+"verdict": {
+  "driving_critical": "no revenue inside the horizon",
+  "driving_critical_anchor": "<verbatim sentence from the doc the Critical cites>",
+  "rule_output": "Skip",
+  "verdict": "Pivot"
+}
+```
+
+`driving_critical_anchor` is quoted verbatim, not paraphrased — `loop_check.py`
+matches it against the doc to decide whether any edit was in the Critical's
+scope. `rule_output` is what the decision rule produced and `verdict` is what
+you reported; they differ only when you overrode, and that difference is what
+caps the second override.
 
 ## Reviewer specifications
 
