@@ -159,6 +159,8 @@ Read v1 and the critique. Apply the doc-size guard to the **combined word count*
 | 8000 – 20000 | Warn; offer to focus only on Consensus/Critical findings to keep the change plan focused |
 | > 20000 | Refuse; ask for excerpt of doc or summary of critique |
 
+The plan's output has a ceiling too: the next stage (`evaluate-proposal-harsh` or `stress-test-idea`) refuses above 15,000 words. Note v1's word count now; a plan whose net effect would push v2 over that line has failed its own change-vs-hedge rule, because a doc that grew is a doc that was patched.
+
 Note in working memory:
 - v1's section structure
 - v1's central thesis and supporting claims
@@ -196,6 +198,8 @@ If a finding could be addressed by any of these, default to the most disruptive 
 ### Step 5 — Render the change plan and write to state
 
 Use the output format below. Write the rendered plan to `./.autopsy/<slug>/v<N>-change-plan.md`. Update state.json with the new artifact and a history entry.
+
+Before writing, total the plan: words cut minus words added, against v1's count. If the estimate exceeds 15,000 words, report it in the plan header as a failure and cut further — the next stage will refuse the result. The plan also states its **landing condition**: what gets written back to the source path when v2 survives review, and what happens to the live document's header if it does not (a superseded note, or nothing). Name any intermediate the loop produced (excerpts, superseded versions) as prunable, or the repo keeps three copies of a document whose verdict was "don't build this".
 
 ## Output format
 
@@ -261,7 +265,7 @@ This is the founder's checklist for the rewrite.
 
 ## Next step
 
-After v2 is drafted, save it as `./.autopsy/[slug]/v[N+1].md` and run `stress-test-idea` (or `evaluate-proposal-harsh` if approaching a decision) on it to verify the changes resolved the findings without introducing new weaknesses. The loop closes when a stress-test pass returns mostly Medium findings or empty critical findings, or when an evaluate pass returns Invest.
+After v2 is drafted, save it as `./.autopsy/[slug]/v[N+1].md` and run `stress-test-idea` (or `evaluate-proposal-harsh` if approaching a decision) on it to verify the changes resolved the findings without introducing new weaknesses. The loop closes when a stress-test pass returns mostly Medium findings or empty critical findings, or when an evaluate pass returns Invest — and the landing condition above then runs: the surviving version is written back to the source path, and the intermediates are pruned.
 ```
 
 ## Examples

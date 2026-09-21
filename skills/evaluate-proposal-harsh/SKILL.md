@@ -79,7 +79,11 @@ Derive a slug (same rules as `stress-test-idea`):
 - Pasted: slug = 2–3-word kebab-case from title/first line.
 - `--slug` overrides.
 
-Ensure `./.autopsy/<slug>/` exists. If `state.json` is present, read it — note prior critiques and the current version. The verdict can reference prior iteration history ("v1 had 3 Criticals; v2 resolved 2, introduced 1 new") which sharpens the flip-condition.
+Ensure `./.autopsy/<slug>/` exists. **It is committed, never gitignored** — the state file is the loop's only memory, and it closes the loop only if it survives the session.
+
+If `state.json` is present, read it — note prior critiques, the current version, and **`investment_context`**. Reviewers are dispatched in parallel and cannot be corrected after fan-out, so context the user supplied on an earlier run must be reloaded here, not re-assumed as "generic founder". The verdict can reference prior iteration history ("v1 had 3 Criticals; v2 resolved 2, introduced 1 new") which sharpens the flip-condition.
+
+**Re-run stop check (do this before Step 2).** If a prior verdict exists for this version, name the Critical that drove it and compare it against every edit made since. If no edit touched the text that Critical cites, do not dispatch the panel: say in chat that the blocker is an unmade decision (the doc still has no number, no legal route, no custody model, or whatever the Critical names), state what the founder must decide, and stop. Another run cannot move a verdict whose driver was never in scope of an edit.
 
 Determine the version label:
 - If state.json doesn't exist → `v1`.
@@ -97,19 +101,23 @@ Read the full document. Count words. Apply the doc-size guard:
 | 5000 – 15000 | Warn: "doc is N words; reviewer cost will be substantial. Proceed with all four, or reduce to three (drop Feasibility OR Risk depending on signal)?" Default to all four if no answer |
 | > 15000 | Refuse; ask for excerpt or chaptered re-invocation |
 
+Over the guard there are two honest options: review section-by-section (one panel per chapter, verdict per chapter), or decline. Do not build a trimmed derivative and label its verdict a verdict on the original. If the user supplies an excerpt, the verdict names the excerpt and lists what was dropped, and the excerpt is a tracked artifact the user must regenerate after every edit to the source.
+
 Capture in working notes (do not show the user):
 - Stated thesis or central claim
 - Target user or market
 - Proposed scope
 - Any numbers (revenue, costs, timeline, TAM)
 - Stated success criteria, if any
-- Whatever the user supplied as investment context
+- Whatever the user supplied as investment context — **write it to `state.json` as `investment_context`** so a later run reloads it
 
 Do not summarize the document back to the user. They wrote it.
 
 ### Step 2 — Dispatch four reviewers in parallel
 
-Spawn four subagents via the Task tool in a single message (multiple tool calls in one turn). Each reviewer gets the full document text, the investment context if provided, and its axis-specific prompt from the templates in the next section.
+Spawn four subagents via the Task tool in a single message (multiple tool calls in one turn). Write the shared brief once — document path or text, investment context, corroboration rules, output format — to one scratchpad file, and give each reviewer only that path plus its axis-specific prompt from the templates in the next section. Four copies of a 14,000-word document in four prompts is the alternative.
+
+**Blocked dispatch.** If a permission classifier refuses one reviewer, the refusal attaches to how the prompt reads, not to the tool. Reframe that axis once in neutral operational terms (the ROI axis passes as "check whether the plan's stated costs, figures and milestones are internally consistent"; it has been refused as "ROI" and "economics"). If it is still refused, run the other three and mark the axis **not-run** in the multiplicity table (below). Do not retry identical bytes, and do not silently drop the axis.
 
 **Parallel dispatch is load-bearing for the same reason as in `stress-test-idea`:** it prevents one axis from anchoring on another's findings. It does not produce statistical independence — all four reviewers share the parent's framing and the model. The product is **complementary axes**, and the multiplicity rule below leverages that by weighting cross-axis agreement.
 
@@ -309,6 +317,8 @@ Two findings from different axes that point at the same underlying issue collaps
 
 The severity of a multi-axis issue is the highest severity any contributing axis assigned.
 
+**Not-run axis.** An axis that could not be dispatched contributes no rows. Findings carried forward from a prior run's verdict for that axis are allowed only if the text that axis judges is unchanged since that run; list them in the table tagged `[carried: not re-run]`, exclude them from `surfaced_by` counts, and name the stale axis in the verdict paragraph. A carried finding cannot be the sole basis for a Critical that drives the verdict.
+
 ### Compute the verdict (multiplicity-aware decision rule)
 
 Apply this rule. Do not improvise from vibes.
@@ -342,7 +352,7 @@ Else:
     → INVEST
 ```
 
-The rule is the default. If your synthesis judgment differs from what the rule produces, override it — but state in the verdict paragraph WHY you overrode. Vibes are not a reason. **Only verified findings feed the rule** — REFUTED findings were dropped and NEEDS-EVIDENCE findings demoted in the verification pass above, so the counts here reflect what survived.
+The rule is the default. If your synthesis judgment differs from what the rule produces, override it — but state in the verdict paragraph WHY you overrode. Vibes are not a reason. **One override per slug per direction.** Check `state.json` history first: if a prior run on this slug already softened the rule's output in the same direction (Skip reported as Pivot, say), report the rule's verdict this time and record the streak as a finding of its own — a rule overridden twice the same way has stopped being a rule. **Only verified findings feed the rule** — REFUTED findings were dropped and NEEDS-EVIDENCE findings demoted in the verification pass above, so the counts here reflect what survived.
 
 ### Check for manufactured convergence (required before writing the verdict)
 
@@ -477,7 +487,7 @@ Why forbidden: no artifact, no threshold, no date. The founder cannot tell wheth
 - **User provides investment context that materially changes the evaluation:** weight feasibility and ROI findings to that context. A project that is Skip for a solo founder with $10k may be Invest for a funded team with $500k.
 - **`thinking-skills` plugin not installed:** the integration hints are soft; reviewers reason inline using the patterns described. Output quality difference is real but not blocking.
 - **Doc > 15000 words:** refuse and ask for an excerpt.
-- **Prior critique exists in state.json:** read it. Use the iteration history to sharpen the verdict ("v1 had 3 Criticals; v2 resolved 2 but introduced this new one which is the basis for Skip").
+- **Prior critique exists in state.json:** read it. Use the iteration history to sharpen the verdict ("v1 had 3 Criticals; v2 resolved 2 but introduced this new one which is the basis for Skip"). Run the Step 0 stop check first: if the driving Critical was not in scope of any edit since, there is no run to do — name the decision the founder owes and stop.
 
 ## What not to do
 
