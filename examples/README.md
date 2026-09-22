@@ -1,28 +1,16 @@
-# Examples
+# Worked examples
 
-Three worked examples showing the plugin's three main verdict paths. Each example directory contains the input doc, the artifacts the plugin produces at each stage, and a `WALKTHROUGH.md` that narrates what happened and why.
+These are **synthetic, illustrative fixtures**, not captured model runs or externally verified research. The three `v1.md` inputs deliberately retain flawed claims. Their citations, competitor descriptions, biographies, prices, and legal statements must not be treated as verified facts. Output documents distinguish input claims, fictional user-supplied evidence, reviewer reasoning, and unresolved questions.
 
-> All output files in these examples are **illustrative** — they show the format and shape the plugin produces, not literal runtime traces. Real outputs will differ in wording but share the structure.
+| Example | Assessment | What to inspect |
+|---|---|---|
+| [GigPurse](consumer-app-pitch/WALKTHROUGH.md) | Proceed with caution for capped discovery; insufficient evidence for the original raise | Stress test → focused user decisions → agent-written v2 → evaluation. Stable finding IDs survive the handoff; better prose does not resolve demand. |
+| [Stellate](b2b-saas-pivot/WALKTHROUGH.md) | Pivot the sole differentiation thesis | One supported causal contradiction, explicitly supplied fixture evidence, completed feasibility review, and a strategy stage that asks before changing customers. |
+| [YieldVault](unsupported-tam-skip/WALKTHROUGH.md) | Insufficient evidence; no business verdict | Correct arithmetic without pretending missing legal or technical evidence proves impossibility. The directory name preserves the historical path, not its conclusion. |
+| [Decision edge cases](edge-cases.md) | Invest, Skip, insufficient evidence, refuted Critical, incomplete coverage | Small contract fixtures distinguishing rule results, evidence, and review completeness. |
 
-| Example | Path | Verdict | What it showcases |
-|---|---|---|---|
-| Consumer app pitch | [`consumer-app-pitch/`](./consumer-app-pitch/) | **Proceed with caution** | Full three-skill loop: stress-test → iterate → re-evaluate. Demonstrates change-vs-hedge enforcement, bucket-aware acceptance, measurable flip-condition. |
-| B2B SaaS pivot | [`b2b-saas-pivot/`](./b2b-saas-pivot/) | **Pivot** | Strong team, wrong thesis. Showcases the Pivot verdict added in v1.1 — multi-axis Critical on the thesis with Feasibility passing cleanly. Verdict names two concrete alternative theses. |
-| Unsupported TAM | [`unsupported-tam-skip/`](./unsupported-tam-skip/) | **Skip** (no plausible flip) | The strictest verdict. 4/4-axis Critical, structurally-broken proposal. Demonstrates the "no plausible flip-condition exists" output for honest no-go calls. |
+Read GigPurse in order: `v1.md`, `v1-stress-test.md`, `v1-change-plan.md`, `v2.md`, `v2-verdict.md`. The change-plan filename is retained for compatibility; its content records decisions and the revision the agent has written, rather than assigning a rewrite to the user.
 
-## Suggested reading order
+Static filenames here make comparisons easy. Live state must retain unique report IDs, source hashes, and previous reports when a version is reviewed again; it must not overwrite history to imitate these filenames.
 
-1. **`consumer-app-pitch/`** first — it's the longest and walks the full loop end-to-end.
-2. **`b2b-saas-pivot/`** next — short (verdict-only) and showcases the headline v1.1 feature.
-3. **`unsupported-tam-skip/`** last — short and shows the strict edge.
-
-Each walkthrough is self-contained; you can read them in any order.
-
-## Adapting an example to your own doc
-
-The simplest way to use an example as a template:
-
-1. Copy the input doc (`v1.md`) shape — section structure, depth of claims, where the numbers go.
-2. Rewrite the content to match your idea.
-3. Run `/autopsy ./your-doc.md` to get real critique on your version.
-4. The artifacts under `./.autopsy/<your-slug>/` will mirror the structure of these example directories.
+To evaluate your idea, supply your existing document and decision context to `/autopsy`. You need not copy the fixtures' length or sections. The agent asks for consequential choices and missing facts, then writes the revision. Structural checks validate contracts and arithmetic only; assessing model judgment requires a separate, recorded evaluation.

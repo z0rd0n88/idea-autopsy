@@ -5,15 +5,15 @@
     "url": "https://github.com/z0rd0n88"
   },
   "metadata": {
-    "description": "A four-skill plugin for honest, decision-shaped idea review.",
-    "version": "1.0.0"
+    "description": "Evidence-based idea assessment and agent-written revisions.",
+    "version": "2.0.0"
   },
   "plugins": [
     {
       "name": "idea-autopsy",
       "source": "./",
-      "description": "A four-skill plugin for honest, decision-shaped idea review: stress-test-idea, iterate-to-v2, evaluate-proposal-harsh, strategize-from-verdict.",
-      "version": "1.0.2",
+      "description": "Evidence-based idea assessment, user decisions, and agent-written revisions across four connected skills.",
+      "version": "2.0.0",
       "author": {
         "name": "z0rd0n88"
       },
