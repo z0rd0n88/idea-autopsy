@@ -102,13 +102,15 @@ Copy the original doc to `./.autopsy/<slug>/v<N>.md` (snapshot) if no snapshot f
 
 ### Step 1 — Read the document and size-check
 
-Read the full document. Count words. Apply the doc-size guard:
+Read the document. If `state.json` already carries a `word_counts` entry for this version, use that number; otherwise run `check` below. Apply the doc-size guard:
 
 | Word count | Action |
 |---|---|
 | < 5000 | Proceed normally with all three reviewers |
 | 5000 – 15000 | Warn the user once: "doc is N words; reviewer cost will be substantial. Proceed with all three reviewers, or reduce to two (A + B)?" Default to all three if no answer in the next message |
 | > 15000 | Refuse: ask for an excerpt (the load-bearing sections only) or run chapter-by-chapter |
+
+Build the review copy first: `python3 "${CLAUDE_PLUGIN_ROOT}/skills/_shared/wordcount.py" excerpt --file <doc> --out ./.autopsy/<slug>/v<N>-review.md`. It drops the sections a verdict never turns on (explainers, revision logs, diagrams, UI flows, component specs, motion, glossaries, appendices) and lists them at the top. The size guard applies to the reviewable count it prints; reviewers read the review copy, not the original; the verdict names the dropped sections. Then run `check --file <doc>`, and record the snapshot with `record --slug <slug> --version <vN> --file <doc>`; `skills/_shared/thresholds.json` stays the only place the numbers live.
 
 Note in working memory (do not show the user):
 - Central thesis
@@ -156,13 +158,14 @@ Once all three reviewers return, classify every finding into one of four buckets
 
 ### Step 4 — Write output to state
 
-Write the rendered synthesis to `./.autopsy/<slug>/v<N>-stress-test.md`. Update `state.json` with the new artifact and an entry in `history` (timestamp, skill, version). State.json schema:
+Write the rendered synthesis to `./.autopsy/<slug>/v<N>-stress-test.md`. Update `state.json` with the new artifact and an entry in `history` (timestamp, skill, version). Preserve keys you did not write, including `word_counts`. State.json schema:
 
 ```json
 {
   "slug": "<slug>",
   "doc_path": "<original path or 'pasted'>",
   "current_version": "v1",
+  "word_counts": { "v1": 4200 },
   "artifacts": {
     "v1": "./.autopsy/<slug>/v1.md",
     "v1-stress-test": "./.autopsy/<slug>/v1-stress-test.md"

@@ -30,7 +30,7 @@ the user's cwd if the doc was pasted). Layout:
 
 ```
 ./.autopsy/<slug>/
-├── state.json                # { slug, doc_path, current_version, artifacts, history }
+├── state.json                # { slug, doc_path, current_version, word_counts, artifacts, history }
 ├── v1.md                     # snapshot of original
 ├── v1-stress-test.md         # stress-test-idea output
 ├── v1-change-plan.md         # iterate-to-v2 output

@@ -101,7 +101,7 @@ Only if the user passed `--validate`. Dispatch the `project-idea-validator` agen
 
 ### Step 4 — Synthesize and write to state
 
-Produce the strategy memo (format below). Recommend ONE path and say why it beats the runners-up. Write to `./.autopsy/<slug>/v<N>-strategy.md` and update `state.json` (new artifact + history entry). Do not overwrite the verdict.
+Produce the strategy memo (format below). Recommend ONE path and say why it beats the runners-up. Write to `./.autopsy/<slug>/v<N>-strategy.md` and update `state.json` (new artifact + history entry). Preserve keys you did not write, including `word_counts`. Do not overwrite the verdict.
 
 ## Output format
 

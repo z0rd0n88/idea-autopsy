@@ -151,13 +151,15 @@ If the user supplied `--slug <name>` or the doc came in as a file path, derive a
 
 ### Step 1 — Read both inputs and size-check
 
-Read v1 and the critique. Apply the doc-size guard to the **combined word count** of doc + critique:
+Read v1 and the critique. If `state.json` already carries a `word_counts` entry for v1, use that number for v1; otherwise run `check` below. Apply the doc-size guard to the **combined word count** of doc + critique:
 
 | Combined words | Action |
 |---|---|
 | < 8000 | Proceed normally |
 | 8000 – 20000 | Warn; offer to focus only on Consensus/Critical findings to keep the change plan focused |
 | > 20000 | Refuse; ask for excerpt of doc or summary of critique |
+
+Run the shared word-count guard, `python3 "${CLAUDE_PLUGIN_ROOT}/skills/_shared/wordcount.py" check --file <doc> --combined <critique>`, and record the snapshot with `record --slug <slug> --version <vN> --file <doc>`; `skills/_shared/thresholds.json` stays the only place the numbers live.
 
 The plan's output has a ceiling too: the next stage (`evaluate-proposal-harsh` or `stress-test-idea`) refuses above 15,000 words. Note v1's word count now; a plan whose net effect would push v2 over that line has failed its own change-vs-hedge rule, because a doc that grew is a doc that was patched.
 
@@ -197,9 +199,11 @@ If a finding could be addressed by any of these, default to the most disruptive 
 
 ### Step 5 — Render the change plan and write to state
 
-Use the output format below. Write the rendered plan to `./.autopsy/<slug>/v<N>-change-plan.md`. Update state.json with the new artifact and a history entry.
+Use the output format below. Write the rendered plan to `./.autopsy/<slug>/v<N>-change-plan.md`. Update state.json with the new artifact and a history entry. Preserve keys you did not write, including `word_counts`.
 
 Before writing, total the plan: words cut minus words added, against v1's count. If the estimate exceeds 15,000 words, report it in the plan header as a failure and cut further — the next stage will refuse the result. The plan also states its **landing condition**: what gets written back to the source path when v2 survives review, and what happens to the live document's header if it does not (a superseded note, or nothing). Name any intermediate the loop produced (excerpts, superseded versions) as prunable, or the repo keeps three copies of a document whose verdict was "don't build this".
+
+Record the v2 snapshot with `python3 "${CLAUDE_PLUGIN_ROOT}/skills/_shared/wordcount.py" record --slug <slug> --version <vN+1> --file <v2>` when it is written: it records the count and exits 1 if over the limit, so a v2 that outgrew the next stage's refusal limit is caught at write time rather than one stage later.
 
 ## Output format
 
