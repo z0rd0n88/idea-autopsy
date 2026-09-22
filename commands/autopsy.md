@@ -1,5 +1,5 @@
 ---
-description: "Route to the right Idea Autopsy skill based on what you have, with state-aware loop closure"
+description: "Entry point for any idea review — validate this idea, pressure-test it, go/no-go, stress test, verdict, v2, or a named autopsy agent. Reads existing .autopsy state first so a second opinion lands beside the first, then routes to the right Idea Autopsy skill."
 argument-hint: "[doc-path] [--loop|--status|--reset|--verify-claims|--validate] [--slug NAME]"
 ---
 
@@ -37,12 +37,25 @@ the user's cwd if the doc was pasted). Layout:
 ├── v2.md                     # founder's rewrite (user provides)
 ├── v2-stress-test.md         # optional re-test
 ├── v2-verdict.md             # evaluate-proposal-harsh output
-└── v2-strategy.md            # strategize-from-verdict output (post-verdict)
+├── v2-strategy.md            # strategize-from-verdict output (post-verdict)
+└── v<N>-idea-validation.md   # project-idea-validator agent output (off-ladder; verdict-stage)
 ```
 
 The slug is derived from the doc filename (basename without extension) unless
 the user passes `--slug NAME`. The router reads state.json (if present) to
 detect what stage the user is at, and routes to the next-logical step.
+
+**`state.json` is a shared append-only ledger, and parallel branches will
+conflict on it.** Two runs on separate branches each add an `artifacts` key and
+a `history` entry to the same file; the report files never collide, the ledger
+always does. Resolve by regeneration, never by hand-editing conflict markers or
+`-X ours`/`-X theirs` (both silently drop one run): take the target branch's
+copy as the base (`git show origin/main:./.autopsy/<slug>/state.json`), re-add
+this run's `artifacts` key and `history` entry programmatically with the entry's
+*original* timestamp, keep `history` sorted by `ts`, and keep the longer `notes`
+and the later `next`. Then read the merged `history`: if another verdict already
+exists on the same version, that is a disagreement to reconcile, not a filing
+problem to tidy.
 
 ## Flags
 
