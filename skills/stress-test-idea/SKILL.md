@@ -110,7 +110,7 @@ Read the document. If `state.json` already carries a `word_counts` entry for thi
 | 5000 – 15000 | Warn the user once: "doc is N words; reviewer cost will be substantial. Proceed with all three reviewers, or reduce to two (A + B)?" Default to all three if no answer in the next message |
 | > 15000 | Refuse: ask for an excerpt (the load-bearing sections only) or run chapter-by-chapter |
 
-Run the shared word-count guard, `python3 "${CLAUDE_PLUGIN_ROOT}/skills/_shared/wordcount.py" check --file <doc>`, and record the snapshot with `record --slug <slug> --version <vN> --file <doc>`; `skills/_shared/thresholds.json` stays the only place the numbers live.
+Build the review copy first: `python3 "${CLAUDE_PLUGIN_ROOT}/skills/_shared/wordcount.py" excerpt --file <doc> --out ./.autopsy/<slug>/v<N>-review.md`. It drops the sections a verdict never turns on (explainers, revision logs, diagrams, UI flows, component specs, motion, glossaries, appendices) and lists them at the top. The size guard applies to the reviewable count it prints; reviewers read the review copy, not the original; the verdict names the dropped sections. Then run `check --file <doc>`, and record the snapshot with `record --slug <slug> --version <vN> --file <doc>`; `skills/_shared/thresholds.json` stays the only place the numbers live.
 
 Note in working memory (do not show the user):
 - Central thesis

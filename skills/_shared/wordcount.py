@@ -9,9 +9,12 @@ here, when it is written, rather than one stage later. The count is kept even
 when it is over the limit: a record of the oversized doc is the useful part.
 The next stage reads the number from state.json instead of recounting.
 
-Fenced blocks (``` and ~~~) and markup tokens (table separator rows, pipes,
-heading and bullet markers) are stripped before counting, so sample JSON and
-code listings do not inflate a doc's prose count.
+The count is the reviewable count: fenced blocks, markup tokens (table
+separator rows, pipes, heading and bullet markers) and whole sections a verdict
+never turns on (explainers, revision logs, diagrams, UI flows, component specs,
+motion, glossaries, appendices) are dropped first. `excerpt` writes that review
+copy to a file with the dropped headings listed at the top, so reviewers read
+what matters and the verdict says what they did not see.
 
     wordcount.py record --slug <slug> --version <vN> --file <path>
     wordcount.py check --file <path> [--combined <critique>]
@@ -80,17 +83,67 @@ def strip_fences(text):
     return "\n".join(out)
 
 
-def count(path):
+def read_doc(path):
     try:
         with open(path, encoding="utf-8", errors="replace") as f:
-            text = f.read()
+            return f.read()
     except OSError as e:
         die(3, "cannot read %s: %s" % (path, e.strerror or e))
-    return len(strip_markup(strip_fences(text)).split())
+
+
+def reviewable(path):
+    """Return (kept_text, dropped_headings, word_count) for the review copy."""
+    kept, dropped = strip_sections(strip_fences(read_doc(path)))
+    return kept, dropped, len(strip_markup(kept).split())
+
+
+def count(path):
+    return reviewable(path)[2]
+
+
+def excerpt(path, out):
+    """Write the review copy: the doc minus dropped sections, headed by the
+    list of what was dropped so the verdict can name it."""
+    kept, dropped, n = reviewable(path)
+    head = "<!-- review excerpt of %s: %d reviewable words; dropped sections: %s -->\n\n" % (
+        os.path.basename(path), n, "; ".join(dropped) or "none")
+    with open(out, "w", encoding="utf-8") as f:
+        f.write(head + kept)
+    return dropped, n
 
 
 SEPARATOR_ROW = re.compile(r"^\s*\|?\s*:?-{2,}[-:|\s]*$")
 LINE_MARKER = re.compile(r"^\s*(#{1,6}|[-*+]|\d+[.)])\s+")
+
+
+DROP_SECTIONS = re.compile(
+    r"(explain like|eli5|revision log|changelog|change log|in pictures|diagram|"
+    r"wirefram|mockup|user flow|user journey|trust journey|screens?\b|component spec|"
+    r"motion|haptic|animation|glossary|table of contents|appendix|acknowledg|"
+    r"faq|frequently asked)",
+    re.I,
+)
+
+
+def strip_sections(text):
+    """Drop whole sections whose heading names review-irrelevant material
+    (explainers, revision logs, diagrams, UI flows, component specs, motion,
+    glossaries, appendices). A verdict never turns on these, so reviewers
+    should not pay to read them. Returns (kept_text, dropped_headings)."""
+    out, dropped, skip_level = [], [], None
+    for line in text.splitlines():
+        m = re.match(r"^(#{1,6})\s+(.*)", line)
+        if m:
+            level = len(m.group(1))
+            if skip_level is not None and level <= skip_level:
+                skip_level = None
+            if skip_level is None and DROP_SECTIONS.search(m.group(2)):
+                skip_level = level
+                dropped.append(m.group(2).strip())
+                continue
+        if skip_level is None:
+            out.append(line)
+    return "\n".join(out) + "\n", dropped
 
 
 def strip_markup(text):
@@ -166,7 +219,16 @@ def main(argv):
     c = sub.add_parser("check", help="count a doc and print the verdict, no write")
     c.add_argument("--file", required=True)
     c.add_argument("--combined", help="second doc; verdict uses the iterate thresholds")
+    e = sub.add_parser("excerpt", help="write the review copy with irrelevant sections dropped")
+    e.add_argument("--file", required=True)
+    e.add_argument("--out", required=True)
     a = p.parse_args(argv)
+
+    if a.cmd == "excerpt":
+        dropped, n = excerpt(a.file, a.out)
+        print("%s: %d reviewable words; dropped %d section(s): %s" % (
+            a.out, n, len(dropped), "; ".join(dropped) or "none"))
+        return 0
 
     if a.cmd == "record":
         n = record(a.slug, a.version, a.file)
@@ -174,7 +236,9 @@ def main(argv):
         print("%s: %d words (%s)" % (a.version, n, msg))
         return 1 if over else 0
 
-    n = count(a.file)
+    _, dropped, n = reviewable(a.file)
+    if dropped:
+        print("dropped from the count: %s" % "; ".join(dropped))
     if a.combined:
         print("%s: %d words" % (a.file, n))
         m = count(a.combined)
@@ -291,6 +355,9 @@ def self_test():
         assert is_self_test(["--self-test"])
         assert not is_self_test(["check", "--file", doc, "--self-test"])
 
+    sec = "# T\n\nkeep one\n\n## Revision log\n\nx y z\n\n### sub\n\nq\n\n## Real\n\nkeep two\n"
+    kept, dropped = strip_sections(sec)
+    assert dropped == ["Revision log"] and "keep two" in kept and "x y z" not in kept, kept
     md = "# Title\n\n| a | b |\n|---|---|\n| one two | three |\n- four\n1. five\n"
     assert len(strip_markup(strip_fences(md)).split()) == 8, strip_markup(md)
     print("self-test ok")

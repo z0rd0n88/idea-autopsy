@@ -101,9 +101,9 @@ Read the document. If `state.json` already carries a `word_counts` entry for thi
 | 5000 – 15000 | Warn: "doc is N words; reviewer cost will be substantial. Proceed with all four, or reduce to three (drop Feasibility OR Risk depending on signal)?" Default to all four if no answer |
 | > 15000 | Refuse; ask for excerpt or chaptered re-invocation |
 
-Run the shared word-count guard, `python3 "${CLAUDE_PLUGIN_ROOT}/skills/_shared/wordcount.py" check --file <doc>`, and record the snapshot with `record --slug <slug> --version <vN> --file <doc>`; `skills/_shared/thresholds.json` stays the only place the numbers live.
+Build the review copy first: `python3 "${CLAUDE_PLUGIN_ROOT}/skills/_shared/wordcount.py" excerpt --file <doc> --out ./.autopsy/<slug>/v<N>-review.md`. It drops the sections a verdict never turns on (explainers, revision logs, diagrams, UI flows, component specs, motion, glossaries, appendices) and lists them at the top. The size guard applies to the reviewable count it prints; reviewers read the review copy, not the original; the verdict names the dropped sections. Then run `check --file <doc>`, and record the snapshot with `record --slug <slug> --version <vN> --file <doc>`; `skills/_shared/thresholds.json` stays the only place the numbers live.
 
-Over the guard there are two honest options: review section-by-section (one panel per chapter, verdict per chapter), or decline. Do not build a trimmed derivative and label its verdict a verdict on the original. If the user supplies an excerpt, the verdict names the excerpt and lists what was dropped, and the excerpt is a tracked artifact the user must regenerate after every edit to the source.
+The guard is measured on the review copy the shared word-count tool writes, which drops only sections a verdict never turns on and lists them at the top. Over the guard even then, review section-by-section (one panel per chapter, verdict per chapter) or decline. Never hand-trim a document into a derivative and call its verdict a verdict on the original; the tool-made copy with its dropped list is the only excerpt a verdict may stand on, and it is regenerated from the source every run.
 
 Capture in working notes (do not show the user):
 - Stated thesis or central claim
