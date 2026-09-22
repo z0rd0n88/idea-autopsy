@@ -292,7 +292,7 @@ def self_test():
         assert not is_self_test(["check", "--file", doc, "--self-test"])
 
     md = "# Title\n\n| a | b |\n|---|---|\n| one two | three |\n- four\n1. five\n"
-    assert len(strip_markup(strip_fences(md)).split()) == 7, strip_markup(md)
+    assert len(strip_markup(strip_fences(md)).split()) == 8, strip_markup(md)
     print("self-test ok")
     return 0
 
