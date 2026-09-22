@@ -9,7 +9,8 @@ here, when it is written, rather than one stage later. The count is kept even
 when it is over the limit: a record of the oversized doc is the useful part.
 The next stage reads the number from state.json instead of recounting.
 
-Fenced blocks (``` and ~~~) are stripped before counting, so sample JSON and
+Fenced blocks (``` and ~~~) and markup tokens (table separator rows, pipes,
+heading and bullet markers) are stripped before counting, so sample JSON and
 code listings do not inflate a doc's prose count.
 
     wordcount.py record --slug <slug> --version <vN> --file <path>
@@ -27,6 +28,7 @@ Exit codes:
 import argparse
 import json
 import os
+import re
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -84,7 +86,24 @@ def count(path):
             text = f.read()
     except OSError as e:
         die(3, "cannot read %s: %s" % (path, e.strerror or e))
-    return len(strip_fences(text).split())
+    return len(strip_markup(strip_fences(text)).split())
+
+
+SEPARATOR_ROW = re.compile(r"^\s*\|?\s*:?-{2,}[-:|\s]*$")
+LINE_MARKER = re.compile(r"^\s*(#{1,6}|[-*+]|\d+[.)])\s+")
+
+
+def strip_markup(text):
+    """Drop tokens that are markup, not words: table separator rows, pipe
+    characters, and heading or bullet markers at line start. Table cell text,
+    inline code and links stay, since a reviewer reads those."""
+    out = []
+    for line in text.splitlines():
+        if SEPARATOR_ROW.match(line):
+            continue
+        line = LINE_MARKER.sub("", line, count=1)
+        out.append(line.replace("|", " "))
+    return "\n".join(out)
 
 
 def check_name(label, value):
@@ -272,6 +291,8 @@ def self_test():
         assert is_self_test(["--self-test"])
         assert not is_self_test(["check", "--file", doc, "--self-test"])
 
+    md = "# Title\n\n| a | b |\n|---|---|\n| one two | three |\n- four\n1. five\n"
+    assert len(strip_markup(strip_fences(md)).split()) == 7, strip_markup(md)
     print("self-test ok")
     return 0
 
