@@ -93,7 +93,7 @@ Copy the doc to `./.autopsy/<slug>/v<N>.md` if no snapshot exists for this versi
 
 ### Step 1 — Read the document and size-check
 
-Read the full document. Count words. Apply the doc-size guard:
+Read the document. If `state.json` already carries a `word_counts` entry for this version, use that number; otherwise run `check` below. Apply the doc-size guard:
 
 | Word count | Action |
 |---|---|
@@ -101,7 +101,7 @@ Read the full document. Count words. Apply the doc-size guard:
 | 5000 – 15000 | Warn: "doc is N words; reviewer cost will be substantial. Proceed with all four, or reduce to three (drop Feasibility OR Risk depending on signal)?" Default to all four if no answer |
 | > 15000 | Refuse; ask for excerpt or chaptered re-invocation |
 
-The guard is mechanical: `python3 skills/_shared/wordcount.py check --file <doc>` prints the count and the verdict against the shared thresholds in `skills/_shared/thresholds.json`, and every snapshot written to `./.autopsy/<slug>/` is recorded with `python3 skills/_shared/wordcount.py record --slug <slug> --version <vN> --file <doc>` so the next stage reads the number from `state.json` instead of recounting.
+Run the shared word-count guard, `python3 "${CLAUDE_PLUGIN_ROOT}/skills/_shared/wordcount.py" check --file <doc>`, and record the snapshot with `record --slug <slug> --version <vN> --file <doc>`; `skills/_shared/thresholds.json` stays the only place the numbers live.
 
 Over the guard there are two honest options: review section-by-section (one panel per chapter, verdict per chapter), or decline. Do not build a trimmed derivative and label its verdict a verdict on the original. If the user supplies an excerpt, the verdict names the excerpt and lists what was dropped, and the excerpt is a tracked artifact the user must regenerate after every edit to the source.
 
@@ -131,7 +131,7 @@ Once all four reviewers return, build the per-issue multiplicity table, apply th
 
 ### Step 4 — Write output to state
 
-Write the rendered evaluation to `./.autopsy/<slug>/v<N>-verdict.md`. Update `state.json` with the new artifact and a history entry.
+Write the rendered evaluation to `./.autopsy/<slug>/v<N>-verdict.md`. Update `state.json` with the new artifact and a history entry. Preserve keys you did not write, including `word_counts`.
 
 ## Reviewer specifications
 
