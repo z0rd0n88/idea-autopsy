@@ -1,70 +1,56 @@
-# Proposal evaluation: Stellate — From spreadsheet to internal app in 60 seconds (v1)
+# Evaluation: Stellate's sole differentiation thesis
 
-State: `./.autopsy/b2b-saas-pivot/v1-verdict.md`
+**Synthetic illustrative output, not runtime evaluation or external research.** Report ID: `stellate-v1-evaluation-fixture-01`. Input: [`v1.md`](v1.md). Statements about actual competitors, employment, market populations, and acquisitions in that input remain externally `not_checked`.
 
-> **Note:** illustrative example showing a **Pivot** verdict — the verdict added in v1.1 of the plugin. Pivot fires when the thesis is wrong but the team/feasibility/market are intact.
+Source version: `v1`; SHA-256: `90abff0a94f90fb31e7f0646747b840a971da59f9b398b281897878e17a590fc`.
 
-## Executive summary
+## Fixture-supplied context and evidence
 
-- **[Critical]** [2/4 axes] *Critical Thinking* — The "we're different because we don't require data migration" wedge is real but small; the cohort that values it most (sub-50-person ops teams) is the cohort least able to pay $30/user enterprise pricing.
-- **[Critical]** [2/4 axes] *ROI* — TAM derivation ($3.6B) multiplies aspirational adoption × aspirational ARPU; bottom-up SAM for the actual wedge (US ops teams that already have a process-bearing sheet AND will pay $30/user) is closer to $80M.
-- **[High]** [1/4 axes] *Critical Thinking* — Strategic positioning ("acquired by Google/Microsoft within 5 years") is a strategy depending on a buyer who has demonstrated declining interest in the category (AppSheet deprioritization is acknowledged but not addressed as a counter-signal).
-- **[Medium]** [1/4 axes] *Risk* — Google can ship "Generate App" as a Sheets-native feature; the Chrome-extension surface is reversible by Google in a single Sheets release.
+These entries are explicitly fictional user inputs. They are not research conducted by the agent.
 
-## Critical thinking
+| Ref | Fictional supplied content | Provenance |
+|---|---|---|
+| ST-D001 | “Decide whether to keep our sole-differentiation thesis or spend two days reframing it around the existing prototype. Do not decide the $4M raise yet. Budget for reframing: $240 and 12 team-hours.” | origin=user; doc_support=supported; external_status=not_checked; confidence=high about the chosen decision |
+| ST-E001 | User-provided comparison trace: the team's existing alternative-tool installation reads a Sheet as source of truth, writes changes back, and requires no migration for the same sample workflow. Treat this as a fixture observation, not a verified statement about all Retool versions or configurations. | origin=user; doc_support=supported; external_status=not_checked; confidence=high within the fixture |
+| ST-E002 | User-provided prototype trace: three sample Sheets produce forms/lists, round-trip edits succeed, and permission-denied requests fail visibly. No enterprise security, load, latency, or arbitrary-schema claim is included. | origin=user; doc_support=supported; external_status=not_checked; confidence=high within the fixture |
+| ST-D002 | “Our no-migration exclusivity claim is the only demonstrated differentiation today. We have not measured a different customer advantage. Preserve our working schema parser and connector; do not select a new vertical without asking.” | origin=user; doc_support=supported; external_status=not_checked; confidence=high about the stated constraints |
 
-- **[Critical]** The wedge ("only product that doesn't leave the spreadsheet") is real but its value is asymmetric: it matters most to small ops teams that already use Sheets and can't afford to migrate. Those teams are also the ones least likely to pay $30/user/month for a Pro tier — they're using Sheets BECAUSE it's free. The doc's comparison table is technically accurate; the strategic conclusion ("therefore $3.6B TAM") does not follow.
-  *Evidence:* the comparison table conflates "differentiation" (which is real) with "willingness to pay at our price" (which is unexamined). The 12/60 weekly-active beta users data is positive but tells us nothing about WTP at $30/user.
+## Review coverage
 
-- **[High]** Strategic exit story rests on a 5-year acquisition by Google, Microsoft, or Notion. Google literally acquired AppSheet to solve this and deprioritized it. The doc acknowledges this as an opening, but the more honest read is that incumbents have looked at this market, made bets, and concluded the unit economics are weak.
-  *Evidence:* doc cites AppSheet as the "wedge is open again" signal; the opposite read (incumbents tried this and walked away from it) is at least as defensible.
+All four axes completed. Critical Thinking compared the exclusivity claim with ST-E001. Feasibility inspected ST-E002 and the 12-hour/$240 reframing plan; no blocking High or Critical was found for that limited task. Risk checked the proposed scope and platform dependency. ROI checked arithmetic and distinguished a small reframing decision from a seed investment.
 
-## Feasibility
+This is not a “missing Feasibility report means pass” case. Production feasibility and the $4M raise still need evidence beyond these traces.
 
-- **[Medium]** Team can ship — ex-Airtable Interface Designer PM + ex-Retool data-sources eng + ex-Sheets API eng is a near-perfect technical roster for this exact problem.
-  (No FAIL findings — feasibility passes cleanly.)
+## Normalized findings
 
-## Risk and red flags
+| Finding / causal issue / assumption | Severity and type | Evidence and consequence |
+|---|---|---|
+| ST-F001 / ST-I001 / ST-A001 | Critical; demonstrated thesis contradiction | `v1.md#differentiation` says “only product” and “entire wedge”; ST-E001 supplies a counterexample to exclusivity and ST-D002 confirms no other demonstrated wedge. The document's own Sheets-connector biography is a reason to investigate, not sufficient proof alone. origin=user; doc_support=supported; external_status=not_checked; confidence=high within the fixture. |
+| ST-F002 / ST-I002 / ST-A002 | Medium for reframing; unresolved question | The 12/60 weekly users in `v1.md#traction` are a user-input claim, not payment evidence. $30/user/month is proposed; no conclusion that small teams cannot afford it follows. origin=document; doc_support=supported for absent payment evidence; external_status=not_checked; confidence=high about that absence. |
+| ST-F003 / ST-I003 / ST-A003 | Medium; unsupported assertion | `v1.md#why-now` relies on acquisition interest and alleged incumbent deprioritization without supplied sources or buyer conversations. Neither the positive story nor the opposite story is verified. origin=document; doc_support=supported; external_status=not_checked; confidence=high about unsupported assertions. |
 
-- **[Medium]** Google can collapse the differentiation in one Sheets release: "File → Generate App." This isn't speculative — Google has shipped exactly this kind of feature inside Sheets (Smart Fill, Smart Cleanup, Connected Sheets). The Chrome-extension surface is also revocable by Google for any reason.
-  *Evidence:* doc mentions AppSheet but doesn't model the response from Google shipping the same feature in-product.
+ST-F001 appears under Critical Thinking and ROI because both depend on ST-A001. It is **one causal Critical**, not two corroborating facts. ST-F002 and ST-F003 are independent questions, not more versions of the same Critical. No invented $80M SAM or categorical customer-price mismatch is used.
 
-- **[Medium]** Sub-50-person ops teams have high churn at the bottom of the market: budget owners change, processes get formalized into proper IT systems, sheets get retired. CHM (customer-hour-month) economics in this segment are typically poor.
-  *Evidence:* doc doesn't model churn at the relevant cohort size.
+ST-F001 has `kind=contradiction`, `evidence_basis=user_report`, `affects_decision=true`, `thesis_breaking=true`, `plausibly_resolvable=false` for preserving this disproven exclusivity claim, `status=active`, and `resolution=unresolved`. Changing the thesis can reuse assets, but cannot make the current claim true. ST-F002/ST-F003 have `affects_decision=false` for the chosen reframing task; they remain evidence gaps for the raise. Feasibility coverage is complete and has no blocking High/Critical.
 
-## ROI signal
+## Arithmetic and verification
 
-- **[Critical]** TAM math: 50M Workspace users × 20% × $30/mo × 12 = $3.6B is the same fantasy multiplication pattern flagged in many proposals. Bottom-up: US ops teams with ≥10 employees and an active Sheets-driven process ≈ ~800K. WTP at $30/user/month for the *whole team* (not just one builder) clears for maybe 10% = 80K teams × average 8 users × $30 × 12 ≈ $230M global SAM at the optimistic end; the realistic addressable in year 1–3 is closer to $80M.
-  *Evidence:* TAM is calculated as users × ARPU × 100% adoption; SAM is never computed.
+V1's `50M × 20% × $30 × 12 = $3.6B` arithmetic is correct for its hypothetical full-population revenue ceiling; the population and eligibility assumptions remain unverified. No SAM is established. Adoption assumptions generate obtainable annual revenue, not a new SAM.
 
-- **[High]** Pro tier ($30/user/month) and Enterprise tier ($250+/user/month) pricing requires the customer to value Stellate as enterprise software, but the wedge (Chrome extension, 60-second-app generation) is consumer-prosumer-shaped. Pricing-product mismatch is a common kill mode in this category (e.g., Coda, Notion's enterprise journey was 5+ years).
-  *Evidence:* doc lists Enterprise tier without naming any signal that beta users would pay enterprise prices.
+**Eight seats at $30/month generate `$2,880` annual recurring revenue per team.** Twelve such teams generate `$34,560` total ARR, not twelve $20,000 contracts. An annual $20,000 contract requires a different seat count, price, or package; the agent must ask before changing the commercial model.
 
----
-
-## Issue multiplicity table
-
-| Issue | Severity | Axes (N) | Primary |
-|---|---|---|---|
-| Wedge real but small; cohort can't afford the proposed price | Critical | Critical Thinking + ROI (2) | Critical Thinking |
-| TAM is fantasy multiplication; realistic SAM ~$80M | Critical | ROI + Critical Thinking (2) | ROI |
-| Strategic exit depends on declining buyer interest | High | Critical Thinking (1) | Critical Thinking |
-| Google can collapse the wedge in one Sheets release | Medium | Risk (1) | Risk |
-| Sub-50 ops teams have poor CHM economics | Medium | Risk (1) | Risk |
-| Pricing-product mismatch (enterprise pricing on prosumer wedge) | High | ROI (1) | ROI |
-
----
+External verification: none. Internally checked: source contradiction against explicitly supplied fixture evidence, causal deduplication, stated prototype coverage, and arithmetic. This report does not validate real competitor features or acquisition intentions.
 
 ## Verdict: Pivot
 
-The central thesis — "build the spreadsheet-native app generator and sell it as a $30–$250/user/month enterprise product" — is the multi-axis Critical: it surfaces in both Critical Thinking (the wedge is real but the price-cohort match is broken) and ROI (the SAM is a fraction of the claimed TAM at this pricing). Feasibility is exceptional (team is uniquely qualified) and Risk has only Mediums, both addressable. **This is the canonical shape for a Pivot:** the team and capability are intact; the thesis is the broken part.
+**Assessment status: complete. Rule result: Pivot. Final verdict: Pivot. Override: none.** One supported Critical defeats the current sole-differentiation thesis; reusable assets ST-E002 are documented; Feasibility completed with no blocking High/Critical for reframing; no separate fatal issue is established. Those conditions, not axis vote counts, support Pivot.
 
-**Two alternative theses worth exploring**, both leveraging the team's specific advantage (deep no-code-in-spreadsheet inference experience + Google Workspace integration depth):
+Contract result: `assessment_status=complete`, `mechanical_verdict=Pivot`, `verdict=Pivot`, `override=null`.
 
-1. **Stellate for regulated industries** — Pivot the target from "ops teams in general" to "compliance, audit, and risk teams in financial services, healthcare, and regulated industrials." These teams DO maintain process-bearing sheets, they CANNOT migrate them to Airtable/Bubble (data residency, SOC2 boundaries, vendor approval cycles), and they pay enterprise software prices ($150–$500/user/month) for tools that work inside their existing Workspace stack. Distribution: GCP marketplace + audit-firm channel partnerships. The team's specific advantage (Google Sheets API depth + Retool data-sources experience with on-premise connectors) maps directly to the regulated-data-residency requirement.
+Here Pivot means replacing the unsupported exclusivity thesis while preserving the prototype. It does not mean changing pricing or selecting a vertical without the user. The original $4M raise is **insufficient_evidence; business verdict: null** pending demand, economics, and production-feasibility evidence.
 
-2. **Stellate as a Sheets-native add-on for a specific vertical** — Pick one of: (a) recruiting agencies running pipelines in Sheets, (b) construction ops teams running material tracking in Sheets, (c) clinical trial coordinators running participant tracking in Sheets. Each vertical has dedicated buyers ($50–$200/user/month is normal in vertical SaaS), and each has known incumbent SaaS that they DON'T like (the Sheets-stayers are stayers for a reason). The team's "60-second appification" wedge is a sales hook into a vertical, not a horizontal product line.
+## Next step and reassessment conditions
 
-Neither alternative requires throwing away the technical work. Both reposition the product to a price-cohort that matches the wedge.
+Run the strategy stage on this input and verdict. Ask which accessible customer workflow the user wants to investigate; after the answer, the agent drafts v2. [The strategy fixture](v1-strategy.md) shows this handoff.
 
-**Flip-condition (current thesis → Invest):** ≥ 12 signed annual contracts at ≥ $20,000 ARR each (i.e., 8-user teams at full Pro pricing) by 2026-12-31, with the 12 contracts spread across at least 3 industries to show the horizontal positioning works. Without those, the current thesis is not viable; pivoting to one of the alternatives above is the recommended path.
+To reconsider the **original exclusivity thesis**, obtain a comparable, reproducible test that actually refutes ST-E001's counterexample. New sales alone cannot make “only product” true. To assess a **new workflow thesis**, propose a separate buyer/task/payment experiment after the user chooses it. Neither path automatically upgrades the seed raise to Invest.

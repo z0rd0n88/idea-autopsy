@@ -1,70 +1,52 @@
-# Proposal evaluation: YieldVault — DeFi yield for your retirement account (v1)
+# Evaluation: YieldVault v1
 
-State: `./.autopsy/unsupported-tam-skip/v1-verdict.md`
+**Synthetic illustrative output; no external legal, financial, market, or technical research was performed.** Report ID: `yieldvault-v1-evaluation-fixture-01`. Source: [`v1.md`](v1.md). The historical directory name is retained, but the supplied evidence does **not** support the old categorical Skip verdict.
 
-> **Note:** illustrative example showing a **Skip** verdict with no plausible flip-condition — the strictest output the plugin produces. Used when the proposal is structurally not viable.
+Source version: `v1`; SHA-256: `3e4a2cfa85cb8e123592516790f4d3a1f0954252e35ac437effe957e5e9f1c3a`.
 
-## Executive summary
+## Assessment
 
-- **[Critical]** [4/4 axes] *Risk* — The product as described creates an unregistered investment adviser + unregistered custodian + ERISA-violating arrangement; the legal surface is the dominant fact and would require ~$5M+ and 2+ years before a single user could be onboarded compliantly.
-- **[Critical]** [3/4 axes] *Critical Thinking* — The wedge ("DeFi yield routed to retirement accounts via Chrome extension") is not a product that can legally exist; it conflates self-directed custody (already legal but limited), broker-dealer custody (regulated), and DeFi yield routing (not approved by any retirement custodian).
-- **[Critical]** [2/4 axes] *Feasibility* — Team has zero financial-services compliance experience, zero smart-contract production experience (founder is self-taught since early 2025), and no technical co-founder. Building a SOC2-audited custody bridge is not 18 months of work for this team — it's not a project this team can complete.
-- **[Critical]** [3/4 axes] *ROI* — The TAM ($13T retirement assets) is unrelated to the SAM (zero — there is no legal product to sell); the 0.1% × 2% × 8% math multiplies values together that have no shared denominator.
+**Assessment status: insufficient_evidence. Business verdict: null.** The decision is whether the proposed $1.5M/18-month undertaking is justified. Reviewers completed all four axes, but essential custody access, legal structure, production capability, costs, and actual demand are not established. Complete reviewer coverage is not complete evidence.
 
-## Critical thinking
+The document warrants concrete questions and arithmetic corrections. It does not establish that the product is illegal, that every custodian forbids it, that the team cannot hire, or that no plausible version could exist.
 
-- **[Critical]** The product description assumes a custodian relationship that doesn't exist. Fidelity / Schwab / Vanguard do NOT permit third-party Chrome extensions to "route" a portion of an IRA balance — there is no API for this, and the few self-directed IRA custodians (Alto, Rocket Dollar) that do permit alternative assets require a structured legal arrangement, not a browser extension. The doc presents a non-existent product as if it's a configuration question.
-  *Evidence:* "Our smart contract custodies the DeFi-eligible portion" — this requires the smart contract address to be the custodian on the IRA, which Fidelity et al. do not allow; only specialized self-directed IRA custodians do, and those carry $300+/year in setup fees per account.
+## Normalized findings
 
-- **[Critical]** "0.1% adoption × 2% allocation × 8% yield differential = massive value capture" is a four-decimal-place fantasy. 0.1% of $13T = $13B addressable; 2% allocation = $260M; 8% yield differential = $20.8M annual yield generated; 1% performance fee = $208K annual revenue at the modeled penetration. That's a side project, not a $1.5M-seed business. The "9-figure revenue line" is unsupported by the doc's own math.
+All cited input claims have external_status `not_checked`. Severity describes consequence for the stated commitment, not certainty that harm will occur.
 
-- **[High]** "Stablecoin regulation creates compliance scaffolding" misreads the regulatory trajectory. GENIUS Act + MiCA regulate stablecoin issuers, not consumer routing of stablecoins through DeFi protocols inside retirement accounts. The proposed product is in the gap between two regulatory regimes (securities + ERISA), not enabled by either.
+| Finding / causal issue / assumption | Severity and type | Source, support, and implication |
+|---|---|---|
+| YV-F001 / YV-I001 / YV-A001 | High; demonstrated numerical mismatch | `v1.md#market` supplies percentages that yield $208,000/year under the interpretation below, not nine figures. It gives no quantified larger-scale scenario. origin=document; doc_support=supported; confidence=high for arithmetic, not market truth. |
+| YV-F002 / YV-I002 / YV-A002 | High; unresolved question | `v1.md#the-product` assumes funds can move from an existing retirement account into a smart contract and back. No written custodian authorization, integration contract, or transaction trace is supplied. origin=document; doc_support=supported for missing evidence; confidence=high about the gap. |
+| YV-F003 / YV-I003 / YV-A003 | High; unresolved question | `v1.md#ask` says “file Form ADV if required” but supplies no qualified analysis of the proposed entity, funds flow, account types, or jurisdictions. origin=document; doc_support=supported for missing evidence; confidence=high about the gap. |
+| YV-F004 / YV-I004 / YV-A004 | High; unresolved question | `v1.md#team` and `#ask` identify a future hire, but no production custody design, security review, implementation evidence, or costed delivery plan. This does not prove the founder can never build a capable team. origin=document; doc_support=supported for missing evidence; confidence=high about the gap. |
+| YV-F005 / YV-I005 / YV-A005 | High; unresolved question | `v1.md#traction` reports sign-ups and “would consider” survey answers. Those are not commitments or payment evidence. origin=document; doc_support=supported; confidence=high about the evidence limit. |
 
-## Feasibility
+Risk, Feasibility, and ROI all depend partly on YV-A002. Repeating that unresolved access assumption across axes cannot manufacture several independent Criticals. No retained finding proves a fatal issue under fixed constraints.
 
-- **[Critical]** Team has no shipping experience in any relevant domain. Founder is a growth marketer with 6 months of self-taught Solidity. There is no smart-contract engineer, no compliance counsel, no broker-dealer relationship. The advisor (unpaid CFA friend) is not a substitute for any of these. Building a SOC2-audited custody bridge with regulatory clearance is not achievable in 18 months by this team at any budget.
-  *Evidence:* "Looking for a technical co-founder" + "self-taught Solidity since early 2025" + no compliance hire planned.
+YV-F001 is `kind=contradiction`, `evidence_basis=document_logic`. YV-F002–YV-F005 are `kind=missing_evidence`, `evidence_basis=document_logic`: missing evidence is established, not the truth of a negative answer. All remain active/unresolved and affect the requested funding decision. Contract result: `assessment_status=insufficient_evidence`, `mechanical_verdict=null`, `verdict=null`, `override=null`.
 
-- **[High]** Smart contract bugs in production custody systems have historically cost $50M–$600M per incident (Poly Network, Wormhole, Ronin, Curve). For retirement-account custody, a single exploit is end-of-company. The doc has no audit budget, no bug bounty, no formal verification plan. "Smart-contract engineer" alone does not solve this.
+## Arithmetic and evidence report
 
-## Risk and red flags
+Under the charitable assumption that the stated 8% is the annual yield base on which the 1% performance fee is charged:
 
-- **[Critical]** Regulatory exposure: this product as described requires SEC registration as an investment adviser (1940 Act), likely broker-dealer registration with FINRA, ERISA fiduciary status, and probably money transmitter licenses in 49 states. None of this is mentioned in the doc. Each is multi-year + multi-million-dollar. "File Form ADV if required" suggests the founder doesn't know what registration is required.
-  *Evidence:* doc says "file Form ADV if required" with no qualified counsel cited.
+`$13,000,000,000,000 × 0.001 × 0.02 × 0.08 × 0.01 = $208,000/year`.
 
-- **[Critical]** Fiduciary liability under ERISA: routing 401(k) funds (employer-sponsored plans covered by ERISA) into DeFi yield without participant-by-participant disclosure and a co-fiduciary structure exposes the founder to personal liability for any loss. This is not patchable; ERISA fiduciary duty is structural, not contractual.
+The intermediate quantities are $13B of adopting account assets, $260M allocated, $20.8M annual yield, and $208K fee revenue. This is conditional arithmetic over unverified inputs, not a forecast. The input calls 8% a “yield differential” but charges on “yield”; the user must clarify the actual fee base. Different definitions change the economics.
 
-- **[High]** Smart-contract custody on retirement money has reputational risk that extends past the founder. First exploit creates regulatory action that closes the entire experimental category and damages every adjacent founder.
+The $13T is an asset-stock claim, not the product's revenue TAM. SAM requires an eligible, accessible population under an actual custody/product arrangement. Obtainable annual revenue then requires adoption, allocation, yield, and fee assumptions. None of those populations or costs is established here.
 
-- **[High]** Distribution risk: Fidelity/Schwab/Vanguard will block this technically (extension detection) and legally (terms of service violations on their portals). The Chrome-extension surface is hostile to the incumbents' explicit terms.
+Internal checks: arithmetic, ambiguous yield/fee definitions, source coverage, and causal deduplication. External checks: none. References to legislation, ETFs, custodians, yields, and safety in v1 remain unverified; this report supplies no legal conclusions or invented compliance cost/timeline.
 
-## ROI signal
+## Questions needed before a consequential revision
 
-- **[Critical]** The TAM is unrelated to the SAM. $13T in retirement assets is a market sizing for *retirement services*, not for the product proposed. The SAM for "browser-extension-mediated DeFi yield routing for IRA-with-Fidelity users" is zero, because the product cannot be legally sold to Fidelity-custodied accounts.
-  *Evidence:* the TAM derivation assumes existing retirement accounts can be a substrate for this product; they cannot.
+1. Which next decision matters: investigate a non-custodial concept, seek a custody partner, or assess the original full product? Recommend a bounded evidence-gathering stage before the $1.5M commitment. Changing custody or customer scope requires the user's choice.
+2. What written custodian access evidence and qualified analysis exist for the actual account types, jurisdictions, and funds flow? A verbal assurance or generic rule reference must retain its original provenance; it is not counsel approval.
+3. Is the 1% fee charged on gross yield, excess yield, assets, or something else? Supply one account-level example and operating costs if known.
+4. What budget/time can be used to investigate, and what relevant implementation/security evidence can be supplied?
 
-- **[High]** Even on self-directed IRA custodians (the only cohort where this is *possible*), the addressable population is ~500K accounts, the per-account setup fee ($300+/year) is a steep barrier, and the cohort that wants DeFi yield + self-directed IRA + Chrome extension is well below 5% of that base. Realistic SAM is < $1M ARR at maturity, charging 1% of yield.
+The agent can correct arithmetic now and outline unresolved sections. Once the user chooses a direction, it writes the revised proposal. It never fills evidence gaps with invented partnerships, security audits, legal clearance, or paid customers.
 
-- **[High]** Insurance product layered on top is mentioned as long-term revenue but requires being a licensed insurance producer in each state — an entire second regulated business added to the stack with no plan or expertise.
+## Reassessment gate
 
----
-
-## Issue multiplicity table
-
-| Issue | Severity | Axes (N) | Primary |
-|---|---|---|---|
-| Product as described creates unregistered IA + ERISA exposure | Critical | Risk + Critical Thinking + Feasibility + ROI (4) | Risk |
-| Wedge is a non-existent product (custodian relationship doesn't exist) | Critical | Critical Thinking + Risk + ROI (3) | Critical Thinking |
-| Team has no relevant shipping experience | Critical | Feasibility + Risk (2) | Feasibility |
-| TAM is unrelated to SAM (SAM = ~zero) | Critical | ROI + Critical Thinking + Risk (3) | ROI |
-| Smart contract bug = company-ending event | High | Feasibility + Risk (2) | Feasibility |
-| Stablecoin reg misread | High | Critical Thinking (1) | Critical Thinking |
-| Insurance product = entire second regulated business | High | ROI (1) | ROI |
-
----
-
-## Verdict: Skip
-
-Four distinct Critical issues, three of them multi-axis at 3/4 or 4/4 coverage. The proposal does not survive scrutiny on a single axis. The dominant fact is regulatory: the product as described is not a thing that can be built and sold to the claimed market without 2+ years and $5M+ of compliance work that the team has neither the capital nor the expertise to undertake. The TAM math is fantasy; the team has no shipping experience in any relevant domain; the technical surface (smart-contract custody of retirement money) is the highest-stakes category in fintech and the team has 6 months of self-taught Solidity experience to bring to it.
-
-**Flip-condition:** *no plausible flip-condition exists.* The verdict is structural, not parametric. Each of the four Criticals would require a different team, a different product, and a different go-to-market — at which point this would be a different company, not a flipped version of this one. The honest recommendation: the founder should redeploy the growth-marketing skillset into a problem space where their experience compounds (a consumer or B2B SaaS adjacent to crypto, without the custody/ERISA load), or join an existing licensed firm in this space (Alto, Rocket Dollar, iTrust) to learn the regulatory surface before founding in it.
+There is no honest automatic Invest/Skip flip-condition yet because the decision's essential facts are unresolved. First obtain a specified funds-flow/access artifact, qualified scope-specific analysis, and a costed model using an unambiguous fee base. Propose a time/cash limit after the user states available resources; do not invent a legal-review quote or deadline. Negative evidence may support Skip for a particular constrained thesis; positive evidence permits further evaluation, not automatic investment.

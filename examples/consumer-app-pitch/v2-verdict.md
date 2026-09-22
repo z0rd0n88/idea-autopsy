@@ -1,51 +1,42 @@
-# Proposal evaluation: GigPurse v2 (v2)
+# Evaluation: GigPurse v2
 
-State: `./.autopsy/consumer-app-pitch/v2-verdict.md`
+**Synthetic illustrative output; not a runtime evaluation or externally verified investment advice.** Report ID: `gigpurse-v2-evaluation-fixture-01`. Source: [`v2.md`](v2.md), plus GP-D001–GP-D005 in the revision record.
 
-> **Note:** illustrative example of `evaluate-proposal-harsh` output after a full loop. Compare to `v1-stress-test.md` to see how v2 resolved the v1 Criticals.
+Source version: `v2`; SHA-256: `79ce46a0b5a107ba03d06e948945ef84736471ffab0020e1f0a78279666fc011`.
 
-## Executive summary
+## Decision scope and coverage
 
-- **[High]** [2/4 axes] *ROI* — TikTok CAC ceiling is asserted but untested; if blended CAC exceeds $18, unit economics break.
-- **[High]** [1/4 axes] *Risk* — single-channel acquisition concentration; TikTok algorithm risk is unhedged.
-- **[High]** [1/4 axes] *Feasibility* — March/April support spike plan relies on one contracted hire; capacity math is tight.
-- **[Medium]** [1/4 axes] *Critical Thinking* — "5% adoption ceiling" assumption is asserted but not benchmarked against a comparable consumer-fintech wedge.
+**Assessment status: complete. Business verdict: Proceed with caution.** This applies only to two-week discovery capped at $600 and 16 founder-hours. It does not approve the $750,000 raise, which remains **insufficient_evidence; business verdict: null** because payment, acquisition, production feasibility, and costs have not been established.
 
-## Critical thinking
+All four axes completed for the bounded exercise. Feasibility checked budget/time sums, manual scope, recruiting dependency, and stop conditions. This is a completed review of discovery, not production-fintech readiness.
 
-- **[Medium]** "5% adoption in pain-aligned cohort" is benchmarked to Mint, but Mint had W-2 mass-market reach; rideshare-specific adoption could be higher (drivers actively seek tooling) or much lower (rideshare income is declining post-2024, reducing the population).
-  *Evidence:* doc names the assumption but doesn't cite a comparable wedge (e.g., Catch Money for freelancers reached ~3% of TAM before being acquired).
+## Normalized findings
 
-## Feasibility
+| Finding / causal issue / assumption | Severity / type | Evidence and consequence |
+|---|---|---|
+| GP-F008 / GP-I008 / GP-A008 | High; supported selection constraint | `v2.md#discovery-plan` and GP-D003 restrict recruitment to a prior waitlist. This limits whose behavior can be observed and blocks interpreting success as general acquisition evidence. origin=document; doc_support=supported; external_status=not_checked; confidence=high. |
+| GP-F002 / GP-I002 / GP-A002 | High for raise; unresolved question | GP-D004 provides no payments. WTP remains unresolved; users' refusal is not proved. origin=user; doc_support=supported; external_status=not_checked; confidence=high about missing evidence. |
+| GP-F006 / GP-I006 / GP-A006 | Medium for discovery; plausible risk | A two-week task cannot establish long-term retention. Adding a habit feature does not resolve the risk. origin=reviewer; doc_support=not_established for actual retention; external_status=not_checked; confidence=medium. |
+| GP-F007 / GP-I007 / GP-A007 | Medium; unresolved question | Setup effort will be observed; results do not exist. origin=reviewer; doc_support=not_established; external_status=not_checked; confidence=medium. |
 
-- **[High]** Tax-season support staffing math is "founders + 1 contractor" for an expected 4× spike. At 5k users, ~50 weekly tickets baseline → ~200/week in March-April. One contractor handling 200/week is plausible only if 80% of tickets are self-serve via the buffer-text auto-response. The doc asserts this but doesn't reference a tested deflection rate.
-  *Evidence:* "1 contracted support hire for tax season" line.
+GP-F001 is corrected; GP-F003's forecast is withdrawn while acquisition remains unknown; GP-F004 is out of prototype scope; GP-F005 is a user choice. No retained Critical is supported. GP-F008 discussed by Risk and ROI is one issue, not independent corroboration.
 
-## Risk and red flags
+For this bounded decision, only GP-F008 has `affects_decision=true`, `kind=risk`, `evidence_basis=document_logic`, `status=active`, and `resolution=unresolved`. Its consequence is conditional continuation: do not treat waitlist results as permission for wider acquisition. GP-F002, GP-F003, GP-F006, and GP-F007 remain tracked with `affects_decision=false` for discovery; they are evidence gaps for the separate raise. Keeping the study's purpose and these limitations explicit is essential to that distinction.
 
-- **[High]** TikTok creator partnerships as the sole primary channel is single-point-of-failure. Algorithm shifts or creator-account suspensions can collapse acquisition overnight. The doc acknowledges "if TikTok-CAC test fails, v3 pauses for re-strategy" — that pause IS the risk if it lands at month 5 with depleted runway.
-  *Evidence:* Distribution section names one channel; no fallback acquisition plan named.
+## Verdict computation
 
-## ROI signal
+Coverage is complete and the bounded decision is assessable. Retained Critical count: **0**. GP-F008 is a High limitation material to interpreting results and proceeding beyond discovery. Zero Criticals does not automatically return Invest; this unresolved High yields **Proceed with caution**. Rule result and final verdict agree; **no override**.
 
-- **[High]** CAC ceiling of $18 is asserted (matches 3× LTV/CAC at $55 LTV) but untested. Consumer-fintech TikTok CAC commonly lands $25–$40. If actual CAC is $30, LTV/CAC drops to 1.8× and the business does not work without an LTV improvement.
-  *Evidence:* doc names the ceiling and the test budget but treats "CAC ≤ $18" as a target, not a validated number.
+Contract result: `assessment_status=complete`, `mechanical_verdict=Proceed with caution`, `verdict=Proceed with caution`, `override=null`.
 
----
+Proceed within GP-D001's cap and interpretation limits. If eligible recruitment fails, stop and record it. Accepting a document does not authorize a broader acquisition campaign or production launch.
 
-## Issue multiplicity table
+## Evidence and verification report
 
-| Issue | Severity | Axes (N) | Primary |
-|---|---|---|---|
-| TikTok CAC ceiling untested | High | ROI + Risk (2) | ROI |
-| Single-channel acquisition concentration | High | Risk (1) | Risk |
-| Tax-season support spike capacity | High | Feasibility (1) | Feasibility |
-| 5% adoption benchmark thin | Medium | Critical Thinking (1) | Critical Thinking |
+Internally checked: market arithmetic, same-period LTV illustration, budget/time sums, source mapping, absence of paid results. Externally checked: none. Fictional user decisions remain origin `user`, external_status `not_checked`. No API, tax, market, or competitor claim is externally verified.
 
----
+## Next experiment and reassessment
 
-## Verdict: Proceed with caution
+This tests whether the task merits further discovery, not the original investment thesis. Collect the task/return records in v2 during two weeks after user initiation under the accepted $600/16-hour cap. Six first sessions/four return attempts are affordable exploratory targets, not prevalence estimates. Record failures and dropouts.
 
-The v1→v2 iteration resolved both v1 Criticals: paid-pilot data (18/22 month-1, 15/22 month-2) established willingness-to-pay; TAM was replaced with a defensible bottom-up SAM. Zero Criticals remain. Three Highs cluster around the same underlying risk: **acquisition unit economics are asserted but not yet validated**. The team has the right pieces (validated WTP, a beachhead, an acquisition test plan, operational honesty about support); they have not yet survived the acquisition-cost gauntlet that kills most consumer fintech. Proceed with the raise, but the raise's first 4 months should be entirely about the TikTok CAC test, not feature work.
-
-**Flip-condition (Proceed → Invest):** TikTok creator-partnership pilot completes by 2026-10-01 with blended CAC ≤ $18 across ≥ 200 attributed paying-user acquisitions, AND paid-pilot cohort retention reaches ≥ 60% at 90 days. Both conditions met flips this to Invest.
+If observations warrant another step, ask about broader recruitment and real-payment testing, with their own budget, threshold rationale, and decision. A successful small pilot triggers reassessment; it does not automatically flip the raise to Invest. The loop waits for actual evidence. The agent writes the next revision when facts or decisions arrive; the user is never assigned a rewrite.

@@ -1,90 +1,43 @@
-# v2 change plan: GigPurse (from v1)
+# Revision record: GigPurse v1 → v2
 
-State: `./.autopsy/consumer-app-pitch/v1-change-plan.md`
+**Synthetic illustrative output.** Report ID: `gigpurse-v1-revision-fixture-01`. Source report: `gigpurse-v1-stress-fixture-01`. This stage produces both this record and the [agent-written revision](v2.md).
 
-> **Note:** illustrative example of `iterate-to-v2` output. The `Removes problematic claim by:` field is the enforcement mechanism for the change-vs-hedge rule.
+Source version: `v1`; SHA-256: `3675f93851f6d24d3143057802f3968b7c9088af47c2b87bfe86c06ec57b9fd7`. Coverage: all seven normalized findings inspected against v1; external checks: none. Generated version: `v2`.
 
 ## Acceptance summary
 
-- Critique format detected: `stress-test-idea`
-- Accepted: 5 findings (4 Consensus, 1 Unique-Reviewer-A `(real)`)
-- Deferred (bucket-defaults): 1 finding (Reviewer A medium "displacement story" — addressable in v3, not blocking v2)
-- Rejected by user: 0
+Format: normalized `stress-test-idea` findings. **7 accepted: 4 Consensus + 3 Unique; 0 deferred; 0 rejected.** Accepted IDs: GP-F001 through GP-F007. Refuted observation B4 is excluded, not an eighth finding. Accepting GP-F006 means investigating it, not declaring its retention hypothesis true.
 
-## Changes by section
+Fixture user acceptance: “Accept GP-F001 through GP-F007 for correction or investigation; I am not endorsing unproven reviewer hypotheses as facts.” This explicit per-finding choice supplies acceptance; the Unique hypotheses would otherwise be deferred. It does not approve any consequential remedy; GP-D001–GP-D005 below do that separately.
 
-### Market
+## Questions asked before drafting
 
-- **Type:** Replace
-- **Change:** Delete the 70M / 18M / $1.7B TAM derivation. Replace with a bottom-up SAM for the rideshare-driver beachhead: ~2M US drivers earning gig-majority income × 5% adoption ceiling × $8/mo × 12 = $9.6M annual SAM. State the load-bearing assumption: "5% adoption assumes Mint-comparable conversion in a smaller, more pain-aligned cohort."
-- **Removes problematic claim by:** deleting paragraph 2 of the Market section (the "70M × 25% × $8 × 1% = $1.7B" derivation) and the implied TAM line; replacing with one paragraph of bottom-up math.
-- **Addresses:** Consensus [Critical] (TAM fantasy), Unique to A `(real)` (segment too broad).
-- **Proposed structure:** "Beachhead: US rideshare drivers earning ≥50% gig income. Population: ~2M. SAM at 5% adoption: $9.6M annual. We expand to delivery and creative gig workers after rideshare validates."
-- **Needs your input:** confirm rideshare is the right beachhead (alternative: delivery is faster to acquire via DashPass partnerships).
+These are **fictional user inputs supplied by this fixture**, not real research or answers obtained during a run. Each has origin `user`, external_status `not_checked`.
 
-### Traction
+| Decision ID | Question and recommendation | Fixture user answer |
+|---|---|---|
+| GP-D001 | Is the next decision the $750k raise or smaller learning step? Recommend bounded discovery while raise evidence is missing. | Evaluate at most $600 and 16 founder-hours over two weeks of discovery. Keep the raise a separate unresolved decision. |
+| GP-D002 | May the prototype use manually entered cash/bills, omitting tax estimates, bank integration, and transfers? This reduces test complexity but does not validate the original tax promise. | Yes. Test weekly-buffer tasks; defer tax and transfer features. |
+| GP-D003 | Which cohort/channel can you access? Recommend rideshare drivers if contacts are eligible and consent to follow-up. | Start with rideshare drivers reached through eligible, consenting waitlist contacts. No platform partnerships or creator deals exist. |
+| GP-D004 | Is there payment, interview, retention, vendor-cost, or market-size evidence beyond v1? | No. Preserve the waitlist as an unverified founder claim; no paid pilots or new interviews. Keep $8/month as a proposed later price test. |
+| GP-D005 | Are six sessions and four second-week follow-ups acceptable learning targets within the cap? | Yes, as exploratory targets. Do not claim statistical validation; stop at the spending/time cap. |
 
-- **Type:** Cut + Replace
-- **Change:** Cut the "5,000 paying users by month 12, $40k MRR" projection entirely. Replace with whatever paid-pilot data you can gather before the raise: number of paid pilots from the waitlist, price paid, weeks retained, what they actually used.
-- **Removes problematic claim by:** deleting the "5,000 paying users / $40k MRR" line from the Ask section; replacing with a "Validation status: N paid pilots at $X price, retained Y weeks" line.
-- **Addresses:** Consensus [Critical] (no WTP evidence), Reviewer A pre-mortem [Critical], Reviewer C unnamed assumption [Critical].
-- **Needs your input:** RUN THE PAID-PILOT TEST. Pick 20 waitlist users, charge them $8/mo for 60 days, report the data. Without this you cannot defensibly make any revenue claim.
+No further answer is needed to draft. Sending invitations, spending money, or conducting an experiment is outside this illustrative drafting workflow.
 
-### (NEW SECTION) Distribution
+## Implemented changes
 
-- **Type:** Add
-- **Change:** Add a section naming one acquisition channel with a measured CAC ceiling. Three credible options:
-  (a) Partnership pilot with one gig platform (DoorDash / Instacart partner-perks bundle).
-  (b) Paid content channel: TikTok creator partnerships, target CAC ≤$15 (test budget $5k).
-  (c) Tax-prep partnership: bundle with FreeTaxUSA, share referral economics.
-- **Removes problematic claim by:** N/A — this is net-new content. The IMPLIED claim being removed is "we'll figure out distribution later"; the new section makes the strategy explicit.
-- **Addresses:** Consensus [High] (one Reddit post is not a plan).
-- **Needs your input:** pick ONE channel and commit. Naming all three reads as undecided.
+| Finding | Change in v2 | Resolution status | What remains |
+|---|---|---|---|
+| GP-F001 | Replace mislabelled market figure with arithmetic and TAM/SAM/penetration definitions. | claim removed; arithmetic corrected | Population and serviceability remain unvalidated. |
+| GP-F002 | State no payment evidence; retain $8/month only as a hypothesis. | risk still unresolved | Discovery interest will not establish WTP. |
+| GP-F003 | Withdraw 5,000-user commitment; add capped recruitment plan. | claim removed; scope changed | Repeatable acquisition and CAC remain unknown. |
+| GP-F004 | Remove tax, bank integration, and money movement per GP-D002. | scope changed | Original-product operational/legal questions remain unresolved. |
+| GP-F005 | Select rideshare discovery per GP-D003 without declaring it superior. | user decision recorded; scope changed | Cohort suitability remains a hypothesis. |
+| GP-F006 | Add second-week return task and reasons for return/non-return. | risk still unresolved | Two weeks do not establish durable retention. |
+| GP-F007 | Add observed setup task, time, errors, and abandonment. | risk still unresolved | No setup results exist yet. |
 
-### (NEW SECTION) Operational scope
+Additions need no artificial “N/A” removal field. The revision can grow to explain evidence and constraints. No pilots, contracts, legal reviews, vendor prices, or interviews were generated as facts.
 
-- **Type:** Add
-- **Change:** Add a section listing operational scope at launch:
-  - Tax states supported at launch (5 max: CA, TX, NY, FL, IL).
-  - Plaid COGS: $0.50/connection/month × 5000 users = $2,500/mo.
-  - Support model: founder-staffed for first 12 months; expected ticket volume in March/April spikes 4×.
-  - User off-ramp: 1-click CSV export of all data; account closure deletes within 30 days.
-- **Removes problematic claim by:** N/A — net-new. The IMPLIED claim being removed is "operational reality is solved"; the new section is the honest scope.
-- **Addresses:** Consensus [High] (operational silence), Reviewer C 3 findings.
+## Handoff
 
-### Solution
-
-- **Type:** Refine
-- **Change:** Add one paragraph naming the retention/habit hook. The current product description lists features; v2 should name the weekly behavioral loop (e.g., "Sunday evening text: 'You have $X buffer, M weeks of expenses covered.'").
-- **Removes problematic claim by:** restructuring the Solution section so the habit hook is feature #1 — not adding a caveat or footnote about retention.
-- **Addresses:** Unique to A `(real)` (steel-manning consumer-budgeting retention).
-
-## Sections to cut from v2
-
-- **(none — all changes are in-place edits or additions)**
-
-## New sections needed in v2
-
-- **Distribution** — see above.
-- **Operational scope** — see above.
-
-## Deferred findings (bucket-defaults)
-
-- **[Medium] Displacement story (Mint refugees switching cost)** — deferred because: Medium severity, no axis cluster. Re-evaluate after v2 paid-pilot data is in; the displacement question becomes urgent if conversion is bottlenecked on switching from existing tools.
-
-## Suggested v2 outline
-
-1. *[unchanged]* The problem
-2. *[edit]* The solution (refine: lead with the habit hook)
-3. *[edit]* Market (replace: bottom-up SAM for rideshare beachhead)
-4. *[unchanged]* Business model
-5. *[unchanged]* Team
-6. *[edit]* Traction (cut: drop the 5000-users projection; replace with paid-pilot data)
-7. *[new]* **Distribution**
-8. *[new]* **Operational scope**
-9. *[edit]* Ask (revise: 12-month milestones tied to paid-pilot data, not unvalidated MRR)
-10. *[unchanged]* Why now
-
-## Next step
-
-Draft v2 as `./.autopsy/consumer-app-pitch/v2.md`, then run `stress-test-idea` on v2 to verify the changes resolve the findings without introducing new weaknesses, OR (if you're approaching the raise) skip to `evaluate-proposal-harsh` for a verdict.
+The agent has written `v2.md` with GP-D001–GP-D005 and all seven finding IDs preserved in this record. Evaluate it for bounded discovery; keep the original raise insufficient evidence. The next dependency is actual observations, not a user rewrite or automatic prose pass.
