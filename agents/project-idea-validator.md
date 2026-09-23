@@ -30,6 +30,8 @@ Check arithmetic independently of external research, retaining units and periods
 
 ## Report
 
+Apply the shared judgment rubric. For authorized reference-class checks, report the comparison population, inclusion/exclusion criteria, outcome definition, dates, failures or survivorship limits, and relevance to the exact forecast. Do not substitute a successful competitor for an adoption base rate. Without research permission, use supplied evidence and mark outside comparisons unchecked or unavailable. Check whether the cited premise supports the claimed causal consequence; rhetorical clarity and model agreement provide no corroboration. Return the actual review provenance and limitations to the parent for report metadata.
+
 Lead with supported conclusions and unresolved decision-critical claims. Include counterevidence, useful assets, source coverage, and the smallest next evidence request. Do not force a go/no-go label from incomplete evidence. If a prior assessment exists, identify agreement or disagreement by finding ID; the parent recomputes the assessment under the shared policy.
 
 Return facts and uncertainty plainly. Do not begin with a prewritten success notification or claim demand, novelty, viability, legality or a moat has been proven because the output template expects it.

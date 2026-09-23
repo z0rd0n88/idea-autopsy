@@ -36,6 +36,8 @@ Optional thinking skills can inform a lens if available, but must not expand aut
 
 ## Synthesis
 
+Use the shared judgment rubric to record the strongest supported success mechanism, its unresolved assumptions and a discriminating test, alongside criticisms. Check material forecasts against relevant supplied comparison outcomes and explicitly assess execution capability. Unavailable comparison evidence remains a limitation. Persist `judgment_audit`, `forecast_checks`, `success_case`, and the actual `review_protocol` in the report result. This adds no default research permission or mandatory repeat model calls.
+
 - Consensus describes several lenses noticing a causal issue, not several independent observations proving it.
 - Unique findings require their own evidence. Mark supported ones `unique_real`, unresolved ones `unique_unrated`, and unsupported stretches `unique_reach`.
 - Contradictions identify which statements actually conflict, their sources and the smallest question or check that resolves them. Different but compatible perspectives are not contradictions.

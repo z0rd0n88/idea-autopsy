@@ -27,6 +27,10 @@ If no critique exists, route to `stress-test-idea`. If the user expressly asks f
 
 ## Remedy versus resolution
 
+Follow the shared judgment rubric. In `result.revision_changes`, classify each change as evidence added, reasoning corrected, presentation only, and/or authorized scope change, linking the finding, change ID, old/new locations and supporting sources. Record actual model and prompt provenance in `result.review_protocol`. Better prose alone does not resolve an evidential gap.
+
+Hand the revised snapshot and applicable evidence/constraints to fresh evaluation reviewers without author attribution or previous verdict framing. Keep the change record and historical findings for the parent's later comparison. Preserve all substantive evidence in the neutral brief. Record unavailable blinding or fresh contexts honestly; the drafting model's approval of its own revision is not independent validation.
+
 | Situation | Valid change | Remaining assessment |
 |---|---|---|
 | Unsupported price assertion | Remove it or label a user-approved pricing hypothesis. | Willingness to pay remains unknown until evidence arrives. |

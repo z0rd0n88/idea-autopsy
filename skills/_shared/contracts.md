@@ -2,6 +2,8 @@
 
 All four skills, the router, and both agents must read this file before work. It is the common authority for evidence, questions, persistence and outputs. Python helpers enforce deterministic parts of this contract; the agent supplies explicit semantic judgments and remains responsible for their accuracy.
 
+Before reviewing, revising or strategizing, also read [the judgment rubric](judgment-rubric.md) completely. Apply its observable criteria, reference-class checks, constructive challenge and fresh revision review. Store the specified additive audit metadata in report `result`; historical reports without it remain readable and are marked protocol-unknown, never retrospectively validated. The rubric does not change verdict thresholds or confer research permission. Confidence is qualitative; source verification and judgment validity remain distinct from deterministic helper validation.
+
 ## Scope, decisions and authority
 
 Evaluate the user's stated decision: a weekend prototype, paid discovery, a full build, or a funding commitment are different decisions. Reload investment context and prior answers before assessing. Record any default assumptions and their effect on confidence. Ask for missing context only when it changes the decision; never silently replace a fundraising decision with permission for a small experiment.
