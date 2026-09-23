@@ -106,6 +106,18 @@ The first command tests deterministic behavior and fixtures. The second checks p
 
 See [CLAUDE.md](CLAUDE.md) for contributor workflow and paired version bumps. It is contributor documentation, not automatically loaded plugin context; the skills explicitly load their shared runtime contract. The plugin validator may warn about that preserved root file.
 
+## Research-informed review and validation
+
+Reviews now use [observable judgment criteria](skills/_shared/judgment-rubric.md), check material forecasts against relevant comparison evidence when available, and assess a credible success mechanism alongside criticism. Reviews record source and model limitations explicitly. Agent revisions distinguish new evidence, corrected reasoning, presentation changes and authorized scope changes; fresh initial evaluation withholds prior verdicts and author attribution.
+
+These safeguards draw on [academic research](docs/scholar-refs.md). Their effectiveness on real proposals remains unmeasured. The [validation protocol and card](docs/evaluation-validation.md) describe controlled comparisons, human review and prospective outcomes. Run the offline audit on explicitly synthetic fixtures:
+
+```bash
+python3 skills/_shared/evaluation_audit.py --request tests/fixtures/evaluation_audit_cases.json
+```
+
+The audit measures recorded consistency, abstention, reference agreement and revision regressions. It makes no model calls and does not change verdicts. Existing reports remain readable; missing historical provenance stays unknown.
+
 ## License
 
 [MIT](LICENSE).

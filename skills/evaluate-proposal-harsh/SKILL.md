@@ -38,6 +38,10 @@ All reviewers use the canonical finding schema. They may return no issues; they 
 
 ## Decision table and evidence
 
+Apply the shared judgment rubric before building the verdict request. Record each decision-driving classification and its counterevidence in `result.judgment_audit`, material forecasts and comparator limits in `result.forecast_checks`, and a credible success mechanism with unresolved assumptions in `result.success_case`. Assess team capability explicitly where material. An unavailable reference class is a stated limitation, not an automatic failure.
+
+Record the actual review setup in `result.review_protocol`. For an agent-written revision, keep author attribution and prior verdicts out of first-pass reviewer and verifier inputs, then compare previous findings after the fresh assessment. Do not remove relevant facts to achieve blinding. If fresh review is unavailable, disclose that limitation and actual coverage; never claim independence. Measure presentation sensitivity through the separate validation protocol, not invented repeat-run results.
+
 The shared contract and executable policy replace severity-vote pseudocode. Pass all four coverage states, canonical findings, decision evidence and documented reusable assets. `decision_evidence.sufficient` needs a rationale and source references supporting the requested commitment.
 
 - Incomplete coverage yields `incomplete_coverage` with no business verdict.

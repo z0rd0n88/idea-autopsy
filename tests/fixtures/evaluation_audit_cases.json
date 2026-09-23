@@ -1,0 +1,190 @@
+{
+  "schema_version": 1,
+  "data_kind": "synthetic",
+  "runs": [
+    {
+      "id": "original",
+      "case_id": "synthetic-purchase",
+      "decision_id": "bounded-purchase-200",
+      "evidence_id": "fixture-evidence-1",
+      "source_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "model": "synthetic-model-v1",
+      "protocol_id": "synthetic-protocol-v1",
+      "condition": "full-workflow",
+      "assessment_status": "complete",
+      "verdict": "Skip",
+      "coverage": {
+        "critical_thinking": "complete",
+        "feasibility": "complete",
+        "risk": "complete",
+        "roi": "complete"
+      },
+      "reference": {
+        "assessment_status": "complete",
+        "verdict": "Invest",
+        "source": "Synthetic independent-label fixture, not a human judgment",
+        "independent": true,
+        "source_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "decision_id": "bounded-purchase-200",
+        "evidence_id": "fixture-evidence-1"
+      }
+    },
+    {
+      "id": "paraphrase",
+      "case_id": "synthetic-purchase",
+      "decision_id": "bounded-purchase-200",
+      "evidence_id": "fixture-evidence-1",
+      "source_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "model": "synthetic-model-v1",
+      "protocol_id": "synthetic-protocol-v1",
+      "condition": "full-workflow",
+      "assessment_status": "complete",
+      "verdict": "Invest",
+      "coverage": {
+        "critical_thinking": "complete",
+        "feasibility": "complete",
+        "risk": "complete",
+        "roi": "complete"
+      },
+      "reference": {
+        "assessment_status": "complete",
+        "verdict": "Invest",
+        "source": "Synthetic independent-label fixture, not a human judgment",
+        "independent": true,
+        "source_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "decision_id": "bounded-purchase-200",
+        "evidence_id": "fixture-evidence-1"
+      }
+    },
+    {
+      "id": "revision",
+      "case_id": "synthetic-purchase",
+      "decision_id": "bounded-purchase-200",
+      "evidence_id": "fixture-evidence-1",
+      "source_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "model": "synthetic-model-v1",
+      "protocol_id": "synthetic-protocol-v1",
+      "condition": "full-workflow",
+      "assessment_status": "complete",
+      "verdict": "Invest",
+      "coverage": {
+        "critical_thinking": "complete",
+        "feasibility": "complete",
+        "risk": "complete",
+        "roi": "complete"
+      },
+      "reference": {
+        "assessment_status": "complete",
+        "verdict": "Invest",
+        "source": "Synthetic independent-label fixture, not a human judgment",
+        "independent": true,
+        "source_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "decision_id": "bounded-purchase-200",
+        "evidence_id": "fixture-evidence-1"
+      }
+    },
+    {
+      "id": "regressed",
+      "case_id": "synthetic-purchase",
+      "decision_id": "bounded-purchase-200",
+      "evidence_id": "fixture-evidence-1",
+      "source_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "model": "synthetic-model-v1",
+      "protocol_id": "synthetic-protocol-v1",
+      "condition": "full-workflow",
+      "assessment_status": "complete",
+      "verdict": "Skip",
+      "coverage": {
+        "critical_thinking": "complete",
+        "feasibility": "complete",
+        "risk": "complete",
+        "roi": "complete"
+      },
+      "reference": {
+        "assessment_status": "complete",
+        "verdict": "Invest",
+        "source": "Synthetic independent-label fixture, not a human judgment",
+        "independent": true,
+        "source_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "decision_id": "bounded-purchase-200",
+        "evidence_id": "fixture-evidence-1"
+      }
+    },
+    {
+      "id": "missing",
+      "case_id": "synthetic-purchase",
+      "decision_id": "bounded-purchase-200",
+      "evidence_id": "fixture-evidence-1",
+      "source_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "model": "synthetic-model-v1",
+      "protocol_id": "synthetic-protocol-v1",
+      "condition": "full-workflow",
+      "assessment_status": "insufficient_evidence",
+      "verdict": null,
+      "coverage": {
+        "critical_thinking": "complete",
+        "feasibility": "complete",
+        "risk": "complete",
+        "roi": "complete"
+      }
+    },
+    {
+      "id": "repeat",
+      "case_id": "synthetic-purchase",
+      "decision_id": "bounded-purchase-200",
+      "evidence_id": "fixture-evidence-1",
+      "source_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "model": "synthetic-model-v1",
+      "protocol_id": "synthetic-protocol-v1",
+      "condition": "full-workflow",
+      "assessment_status": "complete",
+      "verdict": "Skip",
+      "coverage": {
+        "critical_thinking": "complete",
+        "feasibility": "complete",
+        "risk": "complete",
+        "roi": "complete"
+      }
+    }
+  ],
+  "comparisons": [
+    {
+      "kind": "equivalent",
+      "before": "original",
+      "after": "paraphrase",
+      "transform": "paraphrase",
+      "reason": "Fixture asserts identical facts and commitment despite different wording.",
+      "source": "Synthetic comparison fixture"
+    },
+    {
+      "kind": "equivalent",
+      "before": "original",
+      "after": "missing",
+      "transform": "framing",
+      "reason": "Fixture asserts changed framing only; abstention must be visible separately.",
+      "source": "Synthetic comparison fixture"
+    },
+    {
+      "kind": "equivalent",
+      "before": "original",
+      "after": "repeat",
+      "transform": "repeat",
+      "reason": "Same synthetic input and reviewer configuration.",
+      "source": "Synthetic comparison fixture"
+    },
+    {
+      "kind": "revision",
+      "before": "original",
+      "after": "revision",
+      "reason": "Synthetic reasoning correction; independent reference stays Invest.",
+      "source": "Synthetic revision fixture"
+    },
+    {
+      "kind": "revision",
+      "before": "revision",
+      "after": "regressed",
+      "reason": "Synthetic regression; reference stays Invest.",
+      "source": "Synthetic revision fixture"
+    }
+  ]
+}

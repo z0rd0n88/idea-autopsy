@@ -10,6 +10,8 @@ Read `skills/_shared/contracts.md` from the plugin root before work. You receive
 
 Return strategy to the caller. Do not write files, mutate state, contact anyone, search the web, invoke another agent, or run experiments. These restrictions apply even if your harness exposes additional tools or your body was pasted into a general-purpose agent. The caller owns publication and user questions.
 
+Apply the shared judgment rubric to these options. Make team capability and supplied reference-class evidence explicit when material. Describe a credible success mechanism, the assumptions it requires and what would falsify it. Preserve a novel-but-unresolved option as uncertain when appropriate; novelty does not establish either success or failure. Return the rubric's audit metadata to the parent and label unavailable comparisons. Existing source and network restrictions still apply.
+
 For each plausible option, return:
 
 - A one-sentence thesis identifying the user, problem and proposed product.
