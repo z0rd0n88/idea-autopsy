@@ -21,6 +21,7 @@ import copy
 from datetime import datetime, timezone
 import fcntl
 import hashlib
+import importlib.util
 import json
 import math
 import os
@@ -29,6 +30,12 @@ import re
 import sys
 import tempfile
 import uuid
+
+_POLICY_SPEC = importlib.util.spec_from_file_location(
+    "autopsy_state_policy", Path(__file__).with_name("policy.py")
+)
+policy = importlib.util.module_from_spec(_POLICY_SPEC)
+_POLICY_SPEC.loader.exec_module(policy)
 
 SCHEMA_VERSION = 2
 NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,79}\Z")
@@ -445,6 +452,17 @@ def validate_result(result):
         )
     if "findings" in result:
         validate_findings(result["findings"])
+    if "review_protocol" in result:
+        try:
+            roles = policy.review_model_roles(result["review_protocol"])
+        except policy.PolicyError as exc:
+            raise StateError(str(exc)) from exc
+        if any(role["mandatory"] and not role["policy_compliant"] for role in roles):
+            require(
+                result.get("assessment_status") in (None, "incomplete_coverage")
+                and result.get("verdict") is None,
+                "mandatory model gap requires incomplete coverage and no verdict",
+            )
 
 
 def canonical_root(request):

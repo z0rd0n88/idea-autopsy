@@ -12,6 +12,7 @@ from unittest import mock
 SHARED = Path(__file__).resolve().parents[1] / "skills" / "_shared"
 sys.path.insert(0, str(SHARED))
 import state
+import policy
 
 
 class StateTests(unittest.TestCase):
@@ -263,6 +264,53 @@ class StateTests(unittest.TestCase):
                 with self.assertRaises(state.StateError):
                     self.report(**extra)
         self.assertEqual(self.call("status")["state"], before)
+
+    def test_mandatory_model_gap_cannot_be_saved_as_complete_assessment(self):
+        self.init()
+        prepared = policy.execute(
+            "model_preflight",
+            {
+                "role": "risk",
+                "dispatch_path": "inline",
+                "caller_policy": {"model": "claude-opus-5-5", "mandatory": True},
+                "host_can_select": True,
+                "host_can_reveal": True,
+            },
+        )
+        for actual in ("unknown", "claude-sonnet-5"):
+            with self.subTest(actual=actual):
+                role = policy.execute(
+                    "model_observation",
+                    {"preflight": prepared, "actual_model": actual},
+                )
+                with self.assertRaisesRegex(state.StateError, "mandatory model"):
+                    self.report(
+                        result={
+                            "assessment_status": "complete",
+                            "verdict": "Invest",
+                            "review_protocol": {"roles": [role]},
+                        }
+                    )
+        self.assertEqual([], self.call("status")["state"]["reports"])
+        with self.assertRaisesRegex(state.StateError, "incomplete coverage"):
+            self.report(
+                result={
+                    "assessment_status": "insufficient_evidence",
+                    "verdict": None,
+                    "review_protocol": {"roles": [role]},
+                }
+            )
+        saved = self.report(
+            result={
+                "assessment_status": "incomplete_coverage",
+                "verdict": None,
+                "review_protocol": {"roles": [role]},
+            }
+        )
+        self.assertEqual(
+            "incomplete_coverage",
+            saved["state"]["reports"][-1]["result"]["assessment_status"],
+        )
 
     def test_generation_preconditions_prevent_lost_working_state_updates(self):
         self.init()

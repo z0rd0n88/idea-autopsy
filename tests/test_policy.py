@@ -47,7 +47,195 @@ def change(
     return item
 
 
+class ModelDispatchTests(unittest.TestCase):
+    def test_required_model_is_passed_for_registered_and_pasted_agents(self):
+        for dispatch_path in ("registered", "pasted"):
+            with self.subTest(dispatch_path=dispatch_path):
+                prepared = policy.execute(
+                    "model_preflight",
+                    {
+                        "role": "validator",
+                        "dispatch_path": dispatch_path,
+                        "caller_policy": {
+                            "model": "claude-opus-5-5",
+                            "mandatory": True,
+                        },
+                        "agent_model_pin": None,
+                        "agent_pin_known": True,
+                        "host_can_select": True,
+                        "host_can_reveal": True,
+                    },
+                )
+                self.assertTrue(prepared["dispatch_allowed"])
+                self.assertEqual("claude-opus-5-5", prepared["model_argument"])
+                observed = policy.execute(
+                    "model_observation",
+                    {"preflight": prepared, "actual_model": "claude-opus-5-5"},
+                )
+                self.assertEqual("compliant", observed["status"])
+                self.assertEqual("claude-opus-5-5", observed["requested_model"])
+                self.assertEqual("claude-opus-5-5", observed["actual_model"])
+
+    def test_conflicting_agent_pin_is_rejected_before_dispatch(self):
+        prepared = policy.execute(
+            "model_preflight",
+            {
+                "role": "validator",
+                "dispatch_path": "registered",
+                "caller_policy": {"model": "opus", "mandatory": True},
+                "agent_model_pin": "sonnet",
+                "agent_pin_known": True,
+                "host_can_select": True,
+                "host_can_reveal": True,
+            },
+        )
+        self.assertFalse(prepared["dispatch_allowed"])
+        self.assertIsNone(prepared["model_argument"])
+        self.assertEqual("conflicting_pin", prepared["status"])
+
+    def test_unknown_registered_agent_pin_blocks_mandatory_requirement(self):
+        prepared = policy.execute(
+            "model_preflight",
+            {
+                "role": "validator",
+                "dispatch_path": "registered",
+                "caller_policy": {"model": "claude-opus-5-5", "mandatory": True},
+                "agent_pin_known": False,
+                "host_can_select": True,
+                "host_can_reveal": True,
+            },
+        )
+        self.assertFalse(prepared["dispatch_allowed"])
+        self.assertEqual("pin_unknown", prepared["status"])
+
+    def test_mandatory_requirement_blocks_unknown_host_capability(self):
+        for capabilities, expected_status in (
+            (
+                {"host_can_select": None, "host_can_reveal": True},
+                "selection_unavailable",
+            ),
+            (
+                {"host_can_select": True, "host_can_reveal": False},
+                "visibility_unavailable",
+            ),
+        ):
+            with self.subTest(capabilities=capabilities):
+                prepared = policy.execute(
+                    "model_preflight",
+                    {
+                        "role": "risk",
+                        "dispatch_path": "inline",
+                        "caller_policy": {
+                            "model": "claude-opus-5-5",
+                            "mandatory": True,
+                        },
+                        **capabilities,
+                    },
+                )
+                self.assertFalse(prepared["dispatch_allowed"])
+                self.assertEqual(expected_status, prepared["status"])
+
+    def test_unknown_or_mismatched_actual_model_is_not_compliant(self):
+        prepared = policy.execute(
+            "model_preflight",
+            {
+                "role": "risk",
+                "dispatch_path": "inline",
+                "caller_policy": {"model": "claude-opus-5-5", "mandatory": True},
+                "host_can_select": True,
+                "host_can_reveal": True,
+            },
+        )
+        for actual, expected in (
+            ("unknown", "unknown"),
+            ("claude-sonnet-5", "mismatch"),
+        ):
+            with self.subTest(actual=actual):
+                observed = policy.execute(
+                    "model_observation", {"preflight": prepared, "actual_model": actual}
+                )
+                self.assertEqual(expected, observed["status"])
+                self.assertFalse(observed["policy_compliant"])
+                self.assertEqual(actual, observed["actual_model"])
+
+    def test_alias_needs_host_exposed_resolution_to_establish_compliance(self):
+        prepared = policy.execute(
+            "model_preflight",
+            {
+                "role": "risk",
+                "dispatch_path": "inline",
+                "caller_policy": {"model": "opus", "mandatory": True},
+                "host_can_select": True,
+                "host_can_reveal": True,
+            },
+        )
+        unknown = policy.execute(
+            "model_observation",
+            {"preflight": prepared, "actual_model": "claude-opus-5-5"},
+        )
+        self.assertEqual("unknown", unknown["status"])
+        compliant = policy.execute(
+            "model_observation",
+            {
+                "preflight": prepared,
+                "actual_model": "claude-opus-5-5",
+                "host_resolved_model": "claude-opus-5-5",
+            },
+        )
+        self.assertEqual("compliant", compliant["status"])
+
+    def test_no_caller_policy_keeps_dispatch_default_and_records_unknown(self):
+        prepared = policy.execute(
+            "model_preflight",
+            {"role": "risk", "dispatch_path": "inline"},
+        )
+        self.assertTrue(prepared["dispatch_allowed"])
+        self.assertIsNone(prepared["model_argument"])
+        observed = policy.execute(
+            "model_observation", {"preflight": prepared, "actual_model": "unknown"}
+        )
+        self.assertEqual("no_requirement", observed["status"])
+        self.assertIsNone(observed["requested_model"])
+        self.assertEqual("unknown", observed["actual_model"])
+
+
 class VerdictTests(unittest.TestCase):
+    def test_mandatory_model_gap_uses_incomplete_coverage_path(self):
+        prepared = policy.execute(
+            "model_preflight",
+            {
+                "role": "risk",
+                "dispatch_path": "inline",
+                "caller_policy": {"model": "claude-opus-5-5", "mandatory": True},
+                "host_can_select": True,
+                "host_can_reveal": True,
+            },
+        )
+        role = policy.execute(
+            "model_observation", {"preflight": prepared, "actual_model": "unknown"}
+        )
+        result = policy.execute(
+            "verdict", assessment(review_protocol={"roles": [role]})
+        )
+        self.assertEqual("incomplete_coverage", result["assessment_status"])
+        self.assertIsNone(result["verdict"])
+        self.assertEqual(["risk"], result["model_policy_gaps"])
+        self.assertEqual(role, result["review_protocol"]["roles"][0])
+
+    def test_no_model_requirement_does_not_create_a_coverage_gap(self):
+        prepared = policy.execute(
+            "model_preflight", {"role": "risk", "dispatch_path": "inline"}
+        )
+        role = policy.execute(
+            "model_observation", {"preflight": prepared, "actual_model": "unknown"}
+        )
+        result = policy.execute(
+            "verdict", assessment(review_protocol={"roles": [role]})
+        )
+        self.assertEqual("complete", result["assessment_status"])
+        self.assertEqual("Invest", result["verdict"])
+        self.assertEqual([], result["model_policy_gaps"])
+
     def test_shared_assumption_is_not_independent_corroboration(self):
         result = policy.execute(
             "verdict", assessment([finding(), finding(id="F-2", issue_id="I-2")])
