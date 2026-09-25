@@ -12,6 +12,7 @@ from unittest import mock
 SHARED = Path(__file__).resolve().parents[1] / "skills" / "_shared"
 sys.path.insert(0, str(SHARED))
 import state
+import policy
 
 
 class StateTests(unittest.TestCase):
@@ -30,6 +31,14 @@ class StateTests(unittest.TestCase):
         return state.execute(operation, {**self.request, **fields})
 
     def report(self, text="Review", **fields):
+        fields.setdefault(
+            "result",
+            {
+                "assessment_status": "incomplete_coverage",
+                "expected_model_roles": [],
+                "review_protocol": {"roles": []},
+            },
+        )
         return self.call(
             "report", version="v1", kind="stress_test", text=text, **fields
         )
@@ -239,7 +248,14 @@ class StateTests(unittest.TestCase):
 
     def test_report_hashes_unique_ids_and_upstream_report_links(self):
         self.init()
-        first = self.report(result={"summary": "first pass"})["state"]["reports"][-1]
+        first = self.report(
+            result={
+                "summary": "first pass",
+                "assessment_status": "incomplete_coverage",
+                "expected_model_roles": [],
+                "review_protocol": {"roles": []},
+            }
+        )["state"]["reports"][-1]
         second = self.report("Second review", input_report_ids=[first["id"]])["state"][
             "reports"
         ][-1]
@@ -263,6 +279,426 @@ class StateTests(unittest.TestCase):
                 with self.assertRaises(state.StateError):
                     self.report(**extra)
         self.assertEqual(self.call("status")["state"], before)
+
+    def test_mandatory_model_gap_cannot_be_saved_as_complete_assessment(self):
+        self.init()
+        prepared = policy.execute(
+            "model_preflight",
+            {
+                "role": "risk",
+                "dispatch_path": "inline",
+                "caller_policy": {"model": "claude-opus-5-5", "mandatory": True},
+                "host_can_select": True,
+                "host_can_reveal": True,
+            },
+        )
+        expected = [
+            {
+                "role": "risk",
+                "caller_policy": {"model": "claude-opus-5-5", "mandatory": True},
+            }
+        ]
+        for actual in ("unknown", "claude-sonnet-5"):
+            with self.subTest(actual=actual):
+                role = policy.execute(
+                    "model_observation",
+                    {"preflight": prepared, "actual_model": actual},
+                )
+                with self.assertRaisesRegex(state.StateError, "mandatory model"):
+                    self.report(
+                        result={
+                            "assessment_status": "complete",
+                            "verdict": "Invest",
+                            "expected_model_roles": expected,
+                            "review_protocol": {"roles": [role]},
+                        }
+                    )
+        self.assertEqual([], self.call("status")["state"]["reports"])
+        with self.assertRaisesRegex(state.StateError, "incomplete coverage"):
+            self.report(
+                result={
+                    "assessment_status": "insufficient_evidence",
+                    "verdict": None,
+                    "expected_model_roles": expected,
+                    "review_protocol": {"roles": [role]},
+                }
+            )
+        saved = self.report(
+            result={
+                "assessment_status": "incomplete_coverage",
+                "verdict": None,
+                "expected_model_roles": expected,
+                "review_protocol": {"roles": [role]},
+            }
+        )
+        self.assertEqual(
+            "incomplete_coverage",
+            saved["state"]["reports"][-1]["result"]["assessment_status"],
+        )
+
+    def test_new_complete_report_rejects_an_omitted_mandatory_role(self):
+        self.init()
+        expected = [
+            {
+                "role": axis,
+                "caller_policy": (
+                    {"model": "claude-opus-5-5", "mandatory": True}
+                    if axis == "risk"
+                    else None
+                ),
+            }
+            for axis in policy.AXES
+        ]
+        observed = [
+            policy.execute(
+                "model_observation",
+                {
+                    "preflight": policy.execute(
+                        "model_preflight", {"role": axis, "dispatch_path": "inline"}
+                    ),
+                    "actual_model": "unknown",
+                },
+            )
+            for axis in policy.AXES
+            if axis != "risk"
+        ]
+        for protocol in (None, {"roles": observed}):
+            with self.subTest(protocol=protocol):
+                result = {
+                    "expected_model_roles": expected,
+                    "assessment_status": "complete",
+                    "verdict": "Invest",
+                }
+                if protocol is not None:
+                    result["review_protocol"] = protocol
+                with self.assertRaises(state.StateError):
+                    self.call(
+                        "report",
+                        version="v1",
+                        kind="evaluation",
+                        text="Verdict",
+                        result=result,
+                    )
+        self.assertEqual([], self.call("status")["state"]["reports"])
+
+    def test_new_complete_report_needs_a_role_plan_but_legacy_results_remain_readable(
+        self,
+    ):
+        self.init()
+        observed = [
+            policy.execute(
+                "model_observation",
+                {
+                    "preflight": policy.execute(
+                        "model_preflight", {"role": axis, "dispatch_path": "inline"}
+                    ),
+                    "actual_model": "unknown",
+                },
+            )
+            for axis in policy.AXES
+        ]
+        legacy_result = {
+            "assessment_status": "complete",
+            "verdict": "Invest",
+            "review_protocol": {"roles": observed},
+        }
+        state.validate_result(legacy_result)
+        with self.assertRaisesRegex(state.StateError, "expected model role"):
+            self.call(
+                "report",
+                version="v1",
+                kind="evaluation",
+                text="New verdict",
+                result=legacy_result,
+            )
+        self.assertEqual([], self.call("status")["state"]["reports"])
+
+    def test_historical_alias_observation_remains_readable(self):
+        prepared = policy.execute(
+            "model_preflight",
+            {
+                "role": "risk",
+                "dispatch_path": "inline",
+                "caller_policy": {"model": "opus", "mandatory": True},
+                "host_can_select": True,
+                "host_can_reveal": True,
+            },
+        )
+        legacy_role = policy.execute(
+            "model_observation",
+            {
+                "preflight": prepared,
+                "actual_model": "claude-haiku-5",
+                "host_resolved_model": "claude-haiku-5",
+            },
+        )
+        legacy_role.update(status="compliant", policy_compliant=True, limitation=None)
+        state.validate_result(
+            {
+                "assessment_status": "complete",
+                "verdict": "Invest",
+                "review_protocol": {"roles": [legacy_role]},
+            }
+        )
+
+    def test_complete_strategy_without_business_verdict_does_not_need_four_axes(self):
+        self.init()
+        role = policy.execute(
+            "model_observation",
+            {
+                "preflight": policy.execute(
+                    "model_preflight",
+                    {"role": "product-strategist", "dispatch_path": "registered"},
+                ),
+                "actual_model": "unknown",
+            },
+        )
+        saved = self.call(
+            "report",
+            version="v1",
+            kind="strategy",
+            text="Strategy options",
+            result={
+                "assessment_status": "complete",
+                "verdict": None,
+                "expected_model_roles": [
+                    {"role": "product-strategist", "caller_policy": None}
+                ],
+                "review_protocol": {"roles": [role]},
+            },
+        )
+        self.assertEqual("strategy", saved["state"]["reports"][-1]["kind"])
+
+    def test_complete_stress_test_and_strategy_require_planned_roles(self):
+        self.init()
+        expected = [
+            {
+                "role": "risk",
+                "caller_policy": {"model": "opus", "mandatory": True},
+            }
+        ]
+        for kind in ("stress_test", "strategy"):
+            for plan in (expected, []):
+                with self.subTest(kind=kind, plan=plan):
+                    with self.assertRaises(state.StateError):
+                        self.call(
+                            "report",
+                            version="v1",
+                            kind=kind,
+                            text="Incomplete role coverage",
+                            result={
+                                "assessment_status": "complete",
+                                "verdict": None,
+                                "expected_model_roles": plan,
+                                "review_protocol": {"roles": []},
+                            },
+                        )
+        unrelated = policy.execute(
+            "model_observation",
+            {
+                "preflight": policy.execute(
+                    "model_preflight", {"role": "risk", "dispatch_path": "inline"}
+                ),
+                "actual_model": "unknown",
+            },
+        )
+        for kind in ("stress_test", "strategy"):
+            with self.subTest(kind=kind, unrelated_role=True):
+                with self.assertRaises(state.StateError):
+                    self.call(
+                        "report",
+                        version="v1",
+                        kind=kind,
+                        text="Unrelated role",
+                        result={
+                            "assessment_status": "complete",
+                            "verdict": None,
+                            "expected_model_roles": [
+                                {"role": "risk", "caller_policy": None}
+                            ],
+                            "review_protocol": {"roles": [unrelated]},
+                        },
+                    )
+        self.assertEqual([], self.call("status")["state"]["reports"])
+        required_roles = {
+            "stress_test": ("A", "B", "C", "verifier"),
+            "strategy": ("product-strategist",),
+        }
+        for kind in ("stress_test", "strategy"):
+            roles = required_roles[kind]
+            observed = [
+                policy.execute(
+                    "model_observation",
+                    {
+                        "preflight": policy.execute(
+                            "model_preflight",
+                            {"role": role, "dispatch_path": "inline"},
+                        ),
+                        "actual_model": "unknown",
+                    },
+                )
+                for role in roles
+            ]
+            saved = self.call(
+                "report",
+                version="v1",
+                kind=kind,
+                text="Complete role coverage",
+                result={
+                    "assessment_status": "complete",
+                    "verdict": None,
+                    "expected_model_roles": [
+                        {"role": role, "caller_policy": None} for role in roles
+                    ],
+                    "review_protocol": {"roles": observed},
+                },
+            )
+            self.assertEqual(kind, saved["state"]["reports"][-1]["kind"])
+
+    def test_new_complete_evaluation_and_stress_test_require_verifier(self):
+        self.init()
+        finding = json.loads(
+            (SHARED.parents[1] / "tests/fixtures/workflow_cases.json").read_text()
+        )["base_finding"]
+        for kind, roles in (
+            ("evaluation", policy.AXES),
+            ("stress_test", ("A", "B", "C")),
+        ):
+            observed = [
+                policy.execute(
+                    "model_observation",
+                    {
+                        "preflight": policy.execute(
+                            "model_preflight",
+                            {"role": role, "dispatch_path": "inline"},
+                        ),
+                        "actual_model": "unknown",
+                    },
+                )
+                for role in roles
+            ]
+            with self.subTest(kind=kind):
+                with self.assertRaisesRegex(state.StateError, "verifier"):
+                    self.call(
+                        "report",
+                        version="v1",
+                        kind=kind,
+                        text="Unverified decision-driving finding",
+                        result={
+                            "assessment_status": "complete",
+                            "verdict": (
+                                "Proceed with caution" if kind == "evaluation" else None
+                            ),
+                            "findings": [finding],
+                            "expected_model_roles": [
+                                {"role": role, "caller_policy": None} for role in roles
+                            ],
+                            "review_protocol": {"roles": observed},
+                        },
+                    )
+
+    def test_complete_evaluation_declares_when_there_are_no_findings(self):
+        self.init()
+        observed = [
+            policy.execute(
+                "model_observation",
+                {
+                    "preflight": policy.execute(
+                        "model_preflight",
+                        {"role": role, "dispatch_path": "inline"},
+                    ),
+                    "actual_model": "unknown",
+                },
+            )
+            for role in policy.AXES
+        ]
+        result = {
+            "assessment_status": "complete",
+            "verdict": "Invest",
+            "expected_model_roles": [
+                {"role": role, "caller_policy": None} for role in policy.AXES
+            ],
+            "review_protocol": {"roles": observed},
+        }
+        with self.assertRaisesRegex(state.StateError, "findings"):
+            self.call(
+                "report",
+                version="v1",
+                kind="evaluation",
+                text="Missing findings declaration",
+                result=result,
+            )
+        saved = self.call(
+            "report",
+            version="v1",
+            kind="evaluation",
+            text="Explicitly no findings",
+            result={**result, "findings": []},
+        )
+        self.assertEqual("evaluation", saved["state"]["reports"][-1]["kind"])
+
+    def test_missing_planned_role_requires_incomplete_coverage_status(self):
+        self.init()
+        result = {
+            "expected_model_roles": [
+                {
+                    "role": "risk",
+                    "caller_policy": {"model": "opus", "mandatory": True},
+                }
+            ],
+            "review_protocol": {"roles": []},
+            "verdict": None,
+        }
+        for kind in ("stress_test", "strategy"):
+            for status in ("insufficient_evidence", None):
+                with self.subTest(kind=kind, status=status):
+                    attempt = {**result}
+                    if status is not None:
+                        attempt["assessment_status"] = status
+                    with self.assertRaises(state.StateError):
+                        self.call(
+                            "report",
+                            version="v1",
+                            kind=kind,
+                            text="Missing role mislabeled",
+                            result=attempt,
+                        )
+            saved = self.call(
+                "report",
+                version="v1",
+                kind=kind,
+                text="Missing role disclosed",
+                result={**result, "assessment_status": "incomplete_coverage"},
+            )
+            self.assertEqual(
+                "incomplete_coverage",
+                saved["state"]["reports"][-1]["result"]["assessment_status"],
+            )
+
+    def test_new_judgment_reports_require_explicit_coverage_fields(self):
+        self.init()
+        missing_fields = (
+            {},
+            {"assessment_status": "incomplete_coverage"},
+            {"assessment_status": "incomplete_coverage", "expected_model_roles": []},
+            {
+                "assessment_status": "incomplete_coverage",
+                "review_protocol": {"roles": []},
+            },
+        )
+        for kind in ("evaluation", "stress_test", "strategy"):
+            for result in missing_fields:
+                with self.subTest(kind=kind, result=result):
+                    with self.assertRaises(state.StateError):
+                        self.call(
+                            "report",
+                            version="v1",
+                            kind=kind,
+                            text="Narrative without complete provenance",
+                            result=result,
+                        )
+        self.assertEqual([], self.call("status")["state"]["reports"])
+        state.validate_result({}, new_report=False, report_kind="evaluation")
 
     def test_generation_preconditions_prevent_lost_working_state_updates(self):
         self.init()
@@ -505,6 +941,11 @@ class StateTests(unittest.TestCase):
                 "version": "v1",
                 "kind": "stress_test",
                 "text": f"review {index}",
+                "result": {
+                    "assessment_status": "incomplete_coverage",
+                    "expected_model_roles": [],
+                    "review_protocol": {"roles": []},
+                },
             }
             process = subprocess.Popen(
                 [sys.executable, str(SHARED / "state.py"), "report", "--request", "-"],

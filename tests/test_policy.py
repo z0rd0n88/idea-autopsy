@@ -26,10 +26,29 @@ def finding(**changes):
 
 
 def assessment(findings=None, **changes):
+    selected_findings = [] if findings is None else findings
+    roles = list(policy.AXES)
+    if policy.verifier_required(selected_findings):
+        roles.append("verifier")
+    expected = [{"role": role, "caller_policy": None} for role in roles]
+    observed = [
+        policy.execute(
+            "model_observation",
+            {
+                "preflight": policy.execute(
+                    "model_preflight", {"role": role, "dispatch_path": "inline"}
+                ),
+                "actual_model": "unknown",
+            },
+        )
+        for role in roles
+    ]
     result = {
-        "findings": [] if findings is None else findings,
+        "findings": selected_findings,
         "coverage": deepcopy(FIXTURE["coverage"]),
         "decision_evidence": deepcopy(FIXTURE["evidence"]),
+        "expected_model_roles": expected,
+        "review_protocol": {"roles": observed},
     }
     result.update(changes)
     return result
@@ -47,7 +66,394 @@ def change(
     return item
 
 
+class ModelDispatchTests(unittest.TestCase):
+    def test_required_model_is_passed_for_registered_and_pasted_agents(self):
+        for dispatch_path in ("registered", "pasted"):
+            with self.subTest(dispatch_path=dispatch_path):
+                prepared = policy.execute(
+                    "model_preflight",
+                    {
+                        "role": "validator",
+                        "dispatch_path": dispatch_path,
+                        "caller_policy": {
+                            "model": "claude-opus-5-5",
+                            "mandatory": True,
+                        },
+                        "agent_model_pin": None,
+                        "agent_pin_known": True,
+                        "host_can_select": True,
+                        "host_can_reveal": True,
+                    },
+                )
+                self.assertTrue(prepared["dispatch_allowed"])
+                self.assertEqual("claude-opus-5-5", prepared["model_argument"])
+                observed = policy.execute(
+                    "model_observation",
+                    {"preflight": prepared, "actual_model": "claude-opus-5-5"},
+                )
+                self.assertEqual("compliant", observed["status"])
+                self.assertEqual("claude-opus-5-5", observed["requested_model"])
+                self.assertEqual("claude-opus-5-5", observed["actual_model"])
+
+    def test_conflicting_agent_pin_is_rejected_before_dispatch(self):
+        prepared = policy.execute(
+            "model_preflight",
+            {
+                "role": "validator",
+                "dispatch_path": "registered",
+                "caller_policy": {"model": "opus", "mandatory": True},
+                "agent_model_pin": "sonnet",
+                "agent_pin_known": True,
+                "host_can_select": True,
+                "host_can_reveal": True,
+            },
+        )
+        self.assertFalse(prepared["dispatch_allowed"])
+        self.assertIsNone(prepared["model_argument"])
+        self.assertEqual("conflicting_pin", prepared["status"])
+
+    def test_unknown_registered_agent_pin_blocks_mandatory_requirement(self):
+        prepared = policy.execute(
+            "model_preflight",
+            {
+                "role": "validator",
+                "dispatch_path": "registered",
+                "caller_policy": {"model": "claude-opus-5-5", "mandatory": True},
+                "agent_pin_known": False,
+                "host_can_select": True,
+                "host_can_reveal": True,
+            },
+        )
+        self.assertFalse(prepared["dispatch_allowed"])
+        self.assertEqual("pin_unknown", prepared["status"])
+
+    def test_mandatory_requirement_blocks_unknown_host_capability(self):
+        for capabilities, expected_status in (
+            (
+                {"host_can_select": None, "host_can_reveal": True},
+                "selection_unavailable",
+            ),
+            (
+                {"host_can_select": True, "host_can_reveal": False},
+                "visibility_unavailable",
+            ),
+        ):
+            with self.subTest(capabilities=capabilities):
+                prepared = policy.execute(
+                    "model_preflight",
+                    {
+                        "role": "risk",
+                        "dispatch_path": "inline",
+                        "caller_policy": {
+                            "model": "claude-opus-5-5",
+                            "mandatory": True,
+                        },
+                        **capabilities,
+                    },
+                )
+                self.assertFalse(prepared["dispatch_allowed"])
+                self.assertEqual(expected_status, prepared["status"])
+
+    def test_unknown_or_mismatched_actual_model_is_not_compliant(self):
+        prepared = policy.execute(
+            "model_preflight",
+            {
+                "role": "risk",
+                "dispatch_path": "inline",
+                "caller_policy": {"model": "claude-opus-5-5", "mandatory": True},
+                "host_can_select": True,
+                "host_can_reveal": True,
+            },
+        )
+        for actual, expected in (
+            ("unknown", "unknown"),
+            ("claude-sonnet-5", "mismatch"),
+        ):
+            with self.subTest(actual=actual):
+                observed = policy.execute(
+                    "model_observation", {"preflight": prepared, "actual_model": actual}
+                )
+                self.assertEqual(expected, observed["status"])
+                self.assertFalse(observed["policy_compliant"])
+                self.assertEqual(actual, observed["actual_model"])
+
+    def test_alias_needs_host_exposed_resolution_to_establish_compliance(self):
+        prepared = policy.execute(
+            "model_preflight",
+            {
+                "role": "risk",
+                "dispatch_path": "inline",
+                "caller_policy": {"model": "opus", "mandatory": True},
+                "host_can_select": True,
+                "host_can_reveal": True,
+            },
+        )
+        unknown = policy.execute(
+            "model_observation",
+            {"preflight": prepared, "actual_model": "claude-opus-5-5"},
+        )
+        self.assertEqual("unknown", unknown["status"])
+        compliant = policy.execute(
+            "model_observation",
+            {
+                "preflight": prepared,
+                "actual_model": "claude-opus-5-5",
+                "host_resolved_model": "claude-opus-5-5",
+            },
+        )
+        self.assertEqual("compliant", compliant["status"])
+
+    def test_alias_resolution_to_another_family_is_a_mismatch(self):
+        prepared = policy.execute(
+            "model_preflight",
+            {
+                "role": "risk",
+                "dispatch_path": "inline",
+                "caller_policy": {"model": "opus", "mandatory": True},
+                "host_can_select": True,
+                "host_can_reveal": True,
+            },
+        )
+        observed = policy.execute(
+            "model_observation",
+            {
+                "preflight": prepared,
+                "actual_model": "claude-haiku-5",
+                "host_resolved_model": "claude-haiku-5",
+            },
+        )
+        self.assertEqual("mismatch", observed["status"])
+        self.assertFalse(observed["policy_compliant"])
+
+    def test_exposed_alias_needs_matching_resolution(self):
+        prepared = policy.execute(
+            "model_preflight",
+            {
+                "role": "risk",
+                "dispatch_path": "inline",
+                "caller_policy": {"model": "opus", "mandatory": True},
+                "host_can_select": True,
+                "host_can_reveal": True,
+            },
+        )
+        alias_only = policy.execute(
+            "model_observation", {"preflight": prepared, "actual_model": "opus"}
+        )
+        self.assertEqual("unknown", alias_only["status"])
+        self.assertFalse(alias_only["policy_compliant"])
+        resolved = policy.execute(
+            "model_observation",
+            {
+                "preflight": prepared,
+                "actual_model": "opus",
+                "host_resolved_model": "claude-opus-5-5",
+            },
+        )
+        self.assertEqual("compliant", resolved["status"])
+        self.assertTrue(resolved["policy_compliant"])
+        wrong_version = policy.execute(
+            "model_observation",
+            {
+                "preflight": prepared,
+                "actual_model": "claude-opus-5-4",
+                "host_resolved_model": "claude-opus-5-5",
+            },
+        )
+        self.assertEqual("mismatch", wrong_version["status"])
+
+    def test_no_caller_policy_keeps_dispatch_default_and_records_unknown(self):
+        prepared = policy.execute(
+            "model_preflight",
+            {"role": "risk", "dispatch_path": "inline"},
+        )
+        self.assertTrue(prepared["dispatch_allowed"])
+        self.assertIsNone(prepared["model_argument"])
+        observed = policy.execute(
+            "model_observation", {"preflight": prepared, "actual_model": "unknown"}
+        )
+        self.assertEqual("no_requirement", observed["status"])
+        self.assertIsNone(observed["requested_model"])
+        self.assertEqual("unknown", observed["actual_model"])
+
+
 class VerdictTests(unittest.TestCase):
+    def test_decision_driving_finding_requires_a_planned_verifier(self):
+        for changes in (
+            {"severity": "High"},
+            {"severity": "Medium", "affects_decision": True},
+        ):
+            with self.subTest(changes=changes):
+                request = assessment([finding(**changes)])
+                request["expected_model_roles"] = [
+                    item
+                    for item in request["expected_model_roles"]
+                    if item["role"] != "verifier"
+                ]
+                request["review_protocol"]["roles"] = [
+                    item
+                    for item in request["review_protocol"]["roles"]
+                    if item["role"] != "verifier"
+                ]
+                result = policy.execute("verdict", request)
+                self.assertEqual("incomplete_coverage", result["assessment_status"])
+                self.assertIsNone(result["verdict"])
+                self.assertIn("verifier", result["review_role_gaps"])
+        no_verifier_needed = policy.execute(
+            "verdict",
+            assessment([finding(severity="Medium", affects_decision=False)]),
+        )
+        self.assertEqual("complete", no_verifier_needed["assessment_status"])
+        self.assertNotIn("verifier", no_verifier_needed["review_role_gaps"])
+
+    def test_missing_mandatory_role_cannot_complete_a_verdict(self):
+        expected = [
+            {
+                "role": axis,
+                "caller_policy": (
+                    {"model": "claude-opus-5-5", "mandatory": True}
+                    if axis == "risk"
+                    else None
+                ),
+            }
+            for axis in policy.AXES
+        ]
+        observed = [
+            policy.execute(
+                "model_observation",
+                {
+                    "preflight": policy.execute(
+                        "model_preflight", {"role": axis, "dispatch_path": "inline"}
+                    ),
+                    "actual_model": "unknown",
+                },
+            )
+            for axis in policy.AXES
+            if axis != "risk"
+        ]
+        for protocol in (
+            None,
+            {"roles": observed},
+            assessment()["review_protocol"],
+        ):
+            with self.subTest(protocol=protocol):
+                request = assessment(expected_model_roles=expected)
+                if protocol is None:
+                    del request["review_protocol"]
+                else:
+                    request["review_protocol"] = protocol
+                result = policy.execute("verdict", request)
+                self.assertEqual("incomplete_coverage", result["assessment_status"])
+                self.assertIsNone(result["verdict"])
+                self.assertIn("risk", result["model_policy_gaps"])
+
+    def test_complete_verdict_requires_a_predispatch_role_plan(self):
+        request = assessment()
+        del request["expected_model_roles"]
+        result = policy.execute("verdict", request)
+        self.assertEqual("incomplete_coverage", result["assessment_status"])
+        self.assertIsNone(result["verdict"])
+        self.assertEqual(sorted(policy.AXES), result["review_role_gaps"])
+
+    def test_blocked_reviewer_cannot_count_as_complete_coverage(self):
+        request = assessment()
+        request["expected_model_roles"][policy.AXES.index("risk")]["caller_policy"] = {
+            "model": "opus",
+            "mandatory": False,
+        }
+        prepared = policy.execute(
+            "model_preflight",
+            {
+                "role": "risk",
+                "dispatch_path": "registered",
+                "caller_policy": {"model": "opus", "mandatory": False},
+                "agent_model_pin": "sonnet",
+                "agent_pin_known": True,
+                "host_can_select": True,
+                "host_can_reveal": True,
+            },
+        )
+        self.assertFalse(prepared["dispatch_allowed"])
+        request["review_protocol"]["roles"][policy.AXES.index("risk")] = policy.execute(
+            "model_observation",
+            {"preflight": prepared, "actual_model": "unknown"},
+        )
+        result = policy.execute("verdict", request)
+        self.assertEqual("incomplete_coverage", result["assessment_status"])
+        self.assertIsNone(result["verdict"])
+        self.assertIn("risk", result["review_role_gaps"])
+
+    def test_mandatory_model_gap_uses_incomplete_coverage_path(self):
+        prepared = policy.execute(
+            "model_preflight",
+            {
+                "role": "risk",
+                "dispatch_path": "inline",
+                "caller_policy": {"model": "claude-opus-5-5", "mandatory": True},
+                "host_can_select": True,
+                "host_can_reveal": True,
+            },
+        )
+        role = policy.execute(
+            "model_observation", {"preflight": prepared, "actual_model": "unknown"}
+        )
+        request = assessment()
+        request["expected_model_roles"][policy.AXES.index("risk")]["caller_policy"] = {
+            "model": "claude-opus-5-5",
+            "mandatory": True,
+        }
+        request["review_protocol"]["roles"][policy.AXES.index("risk")] = role
+        result = policy.execute("verdict", request)
+        self.assertEqual("incomplete_coverage", result["assessment_status"])
+        self.assertIsNone(result["verdict"])
+        self.assertEqual(["risk"], result["model_policy_gaps"])
+        self.assertEqual(
+            role, result["review_protocol"]["roles"][policy.AXES.index("risk")]
+        )
+
+    def test_confirmed_mandatory_alias_can_complete_a_verdict(self):
+        prepared = policy.execute(
+            "model_preflight",
+            {
+                "role": "risk",
+                "dispatch_path": "inline",
+                "caller_policy": {"model": "opus", "mandatory": True},
+                "host_can_select": True,
+                "host_can_reveal": True,
+            },
+        )
+        role = policy.execute(
+            "model_observation",
+            {
+                "preflight": prepared,
+                "actual_model": "claude-opus-5-5",
+                "host_resolved_model": "claude-opus-5-5",
+            },
+        )
+        request = assessment()
+        request["expected_model_roles"][policy.AXES.index("risk")]["caller_policy"] = {
+            "model": "opus",
+            "mandatory": True,
+        }
+        request["review_protocol"]["roles"][policy.AXES.index("risk")] = role
+        result = policy.execute("verdict", request)
+        self.assertEqual("complete", result["assessment_status"])
+        self.assertEqual("Invest", result["verdict"])
+        self.assertEqual([], result["model_policy_gaps"])
+
+    def test_no_model_requirement_does_not_create_a_coverage_gap(self):
+        prepared = policy.execute(
+            "model_preflight", {"role": "risk", "dispatch_path": "inline"}
+        )
+        role = policy.execute(
+            "model_observation", {"preflight": prepared, "actual_model": "unknown"}
+        )
+        request = assessment()
+        request["review_protocol"]["roles"][policy.AXES.index("risk")] = role
+        result = policy.execute("verdict", request)
+        self.assertEqual("complete", result["assessment_status"])
+        self.assertEqual("Invest", result["verdict"])
+        self.assertEqual([], result["model_policy_gaps"])
+
     def test_shared_assumption_is_not_independent_corroboration(self):
         result = policy.execute(
             "verdict", assessment([finding(), finding(id="F-2", issue_id="I-2")])
@@ -499,7 +905,12 @@ class IntegrationTests(unittest.TestCase):
                     "version": "v1",
                     "kind": "stress_test",
                     "text": "Synthetic findings\n" + json.dumps(findings),
-                    "result": {"findings": findings},
+                    "result": {
+                        "findings": findings,
+                        "assessment_status": "incomplete_coverage",
+                        "expected_model_roles": [],
+                        "review_protocol": {"roles": []},
+                    },
                 },
             )
             prior_report = reviewed["state"]["reports"][-1]

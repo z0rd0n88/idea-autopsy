@@ -21,6 +21,7 @@ import copy
 from datetime import datetime, timezone
 import fcntl
 import hashlib
+import importlib.util
 import json
 import math
 import os
@@ -29,6 +30,12 @@ import re
 import sys
 import tempfile
 import uuid
+
+_POLICY_SPEC = importlib.util.spec_from_file_location(
+    "autopsy_state_policy", Path(__file__).with_name("policy.py")
+)
+policy = importlib.util.module_from_spec(_POLICY_SPEC)
+_POLICY_SPEC.loader.exec_module(policy)
 
 SCHEMA_VERSION = 2
 NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,79}\Z")
@@ -50,6 +57,11 @@ PATCH_FIELDS = {
     "experiments",
 }
 ASSESSMENTS = {"complete", "insufficient_evidence", "incomplete_coverage"}
+CORE_MODEL_ROLES = {
+    "evaluation": policy.AXES,
+    "stress_test": ("A", "B", "C", "verifier"),
+    "strategy": ("product-strategist",),
+}
 VERDICTS = {"Invest", "Proceed with caution", "Pivot", "Skip"}
 REQUEST_FIELDS = {
     "init": {"text", "investment_context"},
@@ -434,7 +446,21 @@ def validate_artifact(artifact):
     string(artifact.get("created_at"), "artifact.created_at")
 
 
-def validate_result(result):
+def validate_result(result, *, new_report=False, report_kind=None):
+    if new_report and report_kind in CORE_MODEL_ROLES:
+        require(
+            "assessment_status" in result,
+            "new judgment report requires assessment_status",
+        )
+        require(
+            "expected_model_roles" in result,
+            "new judgment report requires expected model role plan",
+        )
+        require(
+            isinstance(result.get("review_protocol"), dict)
+            and "roles" in result["review_protocol"],
+            "new judgment report requires review_protocol.roles",
+        )
     if "assessment_status" in result:
         enum(result["assessment_status"], ASSESSMENTS, "assessment_status")
     if result.get("verdict") is not None:
@@ -445,6 +471,60 @@ def validate_result(result):
         )
     if "findings" in result:
         validate_findings(result["findings"])
+    if (
+        new_report
+        and report_kind == "evaluation"
+        and result.get("assessment_status") == "complete"
+    ):
+        require(
+            "findings" in result,
+            "new complete evaluation requires findings for verifier coverage",
+        )
+    # Older immutable reports have no pre-dispatch plan and may contain role
+    # statuses computed under earlier alias rules. Read them as history.
+    if "review_protocol" in result and (new_report or "expected_model_roles" in result):
+        try:
+            roles = policy.review_model_roles(result["review_protocol"])
+        except policy.PolicyError as exc:
+            raise StateError(str(exc)) from exc
+        if any(role["mandatory"] and not role["policy_compliant"] for role in roles):
+            require(
+                result.get("assessment_status") in (None, "incomplete_coverage")
+                and result.get("verdict") is None,
+                "mandatory model gap requires incomplete coverage and no verdict",
+            )
+    model_metadata = "expected_model_roles" in result or "review_protocol" in result
+    if new_report and (
+        result.get("verdict") is not None
+        or (
+            report_kind in CORE_MODEL_ROLES
+            and (result.get("assessment_status") is not None or model_metadata)
+        )
+    ):
+        required_roles = set(CORE_MODEL_ROLES.get(report_kind, ()))
+        if report_kind == "evaluation" and policy.verifier_required(
+            result.get("findings", [])
+        ):
+            required_roles.add("verifier")
+        if result.get("verdict") is not None:
+            required_roles.update(policy.AXES)
+        try:
+            coverage = policy.review_model_coverage(
+                result.get("expected_model_roles"),
+                result.get("review_protocol"),
+                required_roles=required_roles,
+            )
+        except policy.PolicyError as exc:
+            raise StateError(str(exc)) from exc
+        require(
+            not (coverage["review_role_gaps"] or coverage["model_policy_gaps"])
+            or (
+                result.get("assessment_status") == "incomplete_coverage"
+                and result.get("verdict") is None
+            ),
+            "expected model role or policy gaps require incomplete coverage and no verdict: "
+            + ", ".join(coverage["review_role_gaps"] + coverage["model_policy_gaps"]),
+        )
 
 
 def canonical_root(request):
@@ -952,6 +1032,7 @@ def execute(operation, request):
                     "input_report_ids": request.get("input_report_ids", []),
                     "result": copy.deepcopy(request.get("result", {})),
                 }
+                validate_result(report["result"], new_report=True, report_kind=kind)
                 state["reports"].append(report)
                 files.append((relative, data))
                 details["report_id"] = report_id

@@ -414,6 +414,17 @@ def verdict(request):
         ),
         "invalid coverage status",
     )
+    review_protocol = request.get("review_protocol")
+    required_roles = set(AXES)
+    if verifier_required(normalized["findings"]):
+        required_roles.add("verifier")
+    model_coverage = review_model_coverage(
+        request.get("expected_model_roles"),
+        review_protocol,
+        required_roles=required_roles,
+    )
+    model_gaps = model_coverage["model_policy_gaps"]
+    review_role_gaps = model_coverage["review_role_gaps"]
     evidence = obj(request.get("decision_evidence", {}), "decision_evidence")
     sufficient = boolean(
         evidence.get("sufficient", False), "decision_evidence.sufficient"
@@ -497,8 +508,29 @@ def verdict(request):
         "shared_critical_assumptions": shared_assumptions,
         "independence_evidence": deepcopy(independence),
         "unresolved_dependence": unresolved_dependence,
+        "model_policy_gaps": model_gaps,
+        "review_role_gaps": review_role_gaps,
+        "findings": deepcopy(findings),
+        "expected_model_roles": deepcopy(request.get("expected_model_roles") or []),
     }
-    if any(value != "complete" for value in coverage.values()):
+    if review_protocol is not None:
+        result["review_protocol"] = deepcopy(review_protocol)
+    if model_gaps or review_role_gaps:
+        reasons = []
+        if model_gaps:
+            reasons.append(
+                "Mandatory model policy was not confirmed for: " + ", ".join(model_gaps)
+            )
+        if review_role_gaps:
+            reasons.append(
+                "Expected review roles were not observed with their declared policies: "
+                + ", ".join(review_role_gaps)
+            )
+        result.update(
+            assessment_status="incomplete_coverage",
+            reasons=reasons,
+        )
+    elif any(value != "complete" for value in coverage.values()):
         result.update(
             assessment_status="incomplete_coverage",
             reasons=[
@@ -1065,6 +1097,275 @@ def prioritize(request):
     }
 
 
+def model_preflight(request):
+    """Resolve an exposed caller requirement before any judgment-agent dispatch."""
+    role = nonempty(request.get("role"), "role")
+    dispatch_path = request.get("dispatch_path")
+    require(
+        dispatch_path in ("registered", "pasted", "inline"),
+        "invalid dispatch_path",
+    )
+    pin = request.get("agent_model_pin")
+    if pin is not None:
+        pin = nonempty(pin, "agent_model_pin").strip()
+    pin_known = request.get("agent_pin_known")
+    if dispatch_path == "inline" and pin_known is None:
+        pin_known = True
+    require(pin_known is None or type(pin_known) is bool, "invalid agent_pin_known")
+    require(
+        pin_known is not False or pin is None, "unknown agent pin cannot have a value"
+    )
+    caller_policy = request.get("caller_policy")
+    if caller_policy is None:
+        requested_model = None
+        mandatory = False
+    else:
+        caller_policy = obj(caller_policy, "caller_policy")
+        requested_model = nonempty(
+            caller_policy.get("model"), "caller_policy.model"
+        ).strip()
+        mandatory = boolean(caller_policy.get("mandatory"), "caller_policy.mandatory")
+    can_select = request.get("host_can_select")
+    can_reveal = request.get("host_can_reveal")
+    require(can_select is None or type(can_select) is bool, "invalid host_can_select")
+    require(can_reveal is None or type(can_reveal) is bool, "invalid host_can_reveal")
+
+    if requested_model is None:
+        status, allowed, limitation = "no_requirement", True, None
+    elif pin_known is not True:
+        status, allowed = "pin_unknown", not mandatory
+        limitation = "The selected agent definition's model pin was not inspected."
+    elif pin not in (None, "inherit", requested_model):
+        status, allowed = "conflicting_pin", False
+        limitation = "The selected agent definition pins a different model."
+    elif can_select is not True:
+        status, allowed = "selection_unavailable", not mandatory
+        limitation = "The host cannot confirm per-dispatch model selection."
+    elif can_reveal is False:
+        status, allowed = "visibility_unavailable", not mandatory
+        limitation = "The host cannot expose the model used by this role."
+    else:
+        status, allowed, limitation = "ready", True, None
+    return {
+        "role": role,
+        "dispatch_path": dispatch_path,
+        "requested_model": requested_model,
+        "mandatory": mandatory,
+        "agent_model_pin": pin,
+        "agent_pin_known": pin_known,
+        "host_can_select": can_select,
+        "host_can_reveal": can_reveal,
+        "model_argument": requested_model if allowed and can_select is True else None,
+        "dispatch_allowed": allowed,
+        "status": status,
+        "limitation": limitation,
+    }
+
+
+def model_observation(request):
+    """Record only host-exposed model identity and evidenced policy compliance."""
+    prepared = obj(request.get("preflight"), "preflight")
+    expected = model_preflight(
+        {
+            "role": prepared.get("role"),
+            "dispatch_path": prepared.get("dispatch_path"),
+            "caller_policy": (
+                {
+                    "model": prepared["requested_model"],
+                    "mandatory": prepared.get("mandatory"),
+                }
+                if prepared.get("requested_model") is not None
+                else None
+            ),
+            "agent_model_pin": prepared.get("agent_model_pin"),
+            "agent_pin_known": prepared.get("agent_pin_known"),
+            "host_can_select": prepared.get("host_can_select"),
+            "host_can_reveal": prepared.get("host_can_reveal"),
+        }
+    )
+    require(prepared == expected, "preflight record is inconsistent")
+    actual = nonempty(request.get("actual_model", "unknown"), "actual_model").strip()
+    resolved = request.get("host_resolved_model")
+    if resolved is not None:
+        resolved = nonempty(resolved, "host_resolved_model").strip()
+        require(
+            prepared["requested_model"] in ("opus", "sonnet", "haiku", "fable"),
+            "host_resolved_model requires a requested family alias",
+        )
+    if not prepared["dispatch_allowed"]:
+        require(actual == "unknown", "a blocked dispatch cannot have an actual model")
+    if prepared["host_can_reveal"] is False:
+        require(actual == "unknown", "model cannot be exposed by this host")
+
+    status = prepared["status"]
+    limitation = prepared["limitation"]
+    requested = prepared["requested_model"]
+    if status == "ready":
+        if actual == "unknown":
+            status, limitation = "unknown", "The host did not expose the actual model."
+        elif resolved is not None and requested in ("opus", "sonnet", "haiku", "fable"):
+            families = {
+                family
+                for family in ("opus", "sonnet", "haiku", "fable")
+                if re.search(rf"(?<![a-z]){family}(?![a-z])", resolved.casefold())
+            }
+            if len(families) != 1:
+                status = "unknown"
+                limitation = (
+                    "The host's alias resolution does not identify one model family."
+                )
+            elif requested not in families or actual not in (requested, resolved):
+                status = "mismatch"
+                limitation = "The exposed model or alias resolution differs from the requested model."
+            else:
+                status, limitation = "compliant", None
+        elif actual == requested and requested not in (
+            "opus",
+            "sonnet",
+            "haiku",
+            "fable",
+        ):
+            status, limitation = "compliant", None
+        elif requested in ("opus", "sonnet", "haiku", "fable"):
+            status = "unknown"
+            limitation = "The host did not expose how the requested alias resolved."
+        else:
+            status = "mismatch"
+            limitation = "The exposed model differs from the requested model."
+    return {
+        **prepared,
+        "actual_model": actual,
+        "host_resolved_model": resolved,
+        "status": status,
+        "policy_compliant": None if requested is None else status == "compliant",
+        "limitation": limitation,
+    }
+
+
+def review_model_roles(protocol):
+    """Validate observed role records before they affect a verdict or report."""
+    if protocol is None:
+        return []
+    protocol = obj(protocol, "review_protocol")
+    roles = sequence(protocol.get("roles", []), "review_protocol.roles")
+    for role in roles:
+        role = obj(role, "review_protocol role")
+        prepared = {
+            key: role.get(key)
+            for key in (
+                "role",
+                "dispatch_path",
+                "requested_model",
+                "mandatory",
+                "agent_model_pin",
+                "agent_pin_known",
+                "host_can_select",
+                "host_can_reveal",
+                "model_argument",
+                "dispatch_allowed",
+                "status",
+                "limitation",
+            )
+        }
+        # The observed status replaces the preflight status; recompute preflight
+        # from its inputs rather than trusting the serialized outcome.
+        prepared = model_preflight(
+            {
+                "role": prepared["role"],
+                "dispatch_path": prepared["dispatch_path"],
+                "caller_policy": (
+                    {
+                        "model": prepared["requested_model"],
+                        "mandatory": prepared["mandatory"],
+                    }
+                    if prepared["requested_model"] is not None
+                    else None
+                ),
+                "agent_model_pin": prepared["agent_model_pin"],
+                "agent_pin_known": prepared["agent_pin_known"],
+                "host_can_select": prepared["host_can_select"],
+                "host_can_reveal": prepared["host_can_reveal"],
+            }
+        )
+        observed = model_observation(
+            {
+                "preflight": prepared,
+                "actual_model": role.get("actual_model", "unknown"),
+                "host_resolved_model": role.get("host_resolved_model"),
+            }
+        )
+        require(role == observed, "review_protocol role record is inconsistent")
+    return roles
+
+
+def verifier_required(findings):
+    """A fresh verifier covers consequential or severe findings."""
+    return any(
+        finding["severity"] in ("Critical", "High") or finding["affects_decision"]
+        for finding in findings
+    )
+
+
+def review_model_coverage(expected_roles, protocol, *, required_roles=AXES):
+    """Compare the pre-dispatch role plan with post-dispatch observations."""
+    roles = review_model_roles(protocol)
+    expected = sequence(
+        [] if expected_roles is None else expected_roles, "expected_model_roles"
+    )
+    planned = {}
+    for item in expected:
+        item = obj(item, "expected_model_roles entry")
+        require(
+            set(item) == {"role", "caller_policy"},
+            "expected_model_roles entry needs role and caller_policy",
+        )
+        name = nonempty(item["role"], "expected_model_roles.role")
+        require(name not in planned, "duplicate expected model role")
+        caller_policy = item["caller_policy"]
+        if caller_policy is None:
+            planned[name] = (None, False)
+        else:
+            caller_policy = obj(caller_policy, "expected_model_roles.caller_policy")
+            require(
+                set(caller_policy) == {"model", "mandatory"},
+                "expected caller policy needs model and mandatory",
+            )
+            planned[name] = (
+                nonempty(caller_policy["model"], "expected model").strip(),
+                boolean(caller_policy["mandatory"], "expected mandatory"),
+            )
+    observed = {}
+    for role in roles:
+        name = role["role"]
+        require(name not in observed, "duplicate observed model role")
+        observed[name] = role
+    role_gaps = set(required_roles) - set(planned)
+    role_gaps.update(set(planned) ^ set(observed))
+    model_gaps = {
+        role["role"]
+        for role in roles
+        if role["mandatory"] and not role["policy_compliant"]
+    }
+    for name, (requested, mandatory) in planned.items():
+        role = observed.get(name)
+        if role is None:
+            if mandatory:
+                model_gaps.add(name)
+            continue
+        if not role["dispatch_allowed"]:
+            role_gaps.add(name)
+        if (role["requested_model"], role["mandatory"]) != (requested, mandatory):
+            role_gaps.add(name)
+            if mandatory:
+                model_gaps.add(name)
+        elif mandatory and not role["policy_compliant"]:
+            model_gaps.add(name)
+    return {
+        "review_role_gaps": sorted(role_gaps),
+        "model_policy_gaps": sorted(model_gaps),
+    }
+
+
 OPERATIONS = {
     name: globals()[name]
     for name in (
@@ -1075,6 +1376,8 @@ OPERATIONS = {
         "gate",
         "route",
         "prioritize",
+        "model_preflight",
+        "model_observation",
     )
 }
 
