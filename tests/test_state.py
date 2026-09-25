@@ -445,6 +445,55 @@ class StateTests(unittest.TestCase):
         )
         self.assertEqual("strategy", saved["state"]["reports"][-1]["kind"])
 
+    def test_complete_stress_test_and_strategy_require_planned_roles(self):
+        self.init()
+        expected = [
+            {
+                "role": "risk",
+                "caller_policy": {"model": "opus", "mandatory": True},
+            }
+        ]
+        for kind in ("stress_test", "strategy"):
+            for plan in (expected, []):
+                with self.subTest(kind=kind, plan=plan):
+                    with self.assertRaises(state.StateError):
+                        self.call(
+                            "report",
+                            version="v1",
+                            kind=kind,
+                            text="Incomplete role coverage",
+                            result={
+                                "assessment_status": "complete",
+                                "verdict": None,
+                                "expected_model_roles": plan,
+                                "review_protocol": {"roles": []},
+                            },
+                        )
+        self.assertEqual([], self.call("status")["state"]["reports"])
+        observed = policy.execute(
+            "model_observation",
+            {
+                "preflight": policy.execute(
+                    "model_preflight", {"role": "risk", "dispatch_path": "inline"}
+                ),
+                "actual_model": "unknown",
+            },
+        )
+        for kind in ("stress_test", "strategy"):
+            saved = self.call(
+                "report",
+                version="v1",
+                kind=kind,
+                text="Complete role coverage",
+                result={
+                    "assessment_status": "complete",
+                    "verdict": None,
+                    "expected_model_roles": [{"role": "risk", "caller_policy": None}],
+                    "review_protocol": {"roles": [observed]},
+                },
+            )
+            self.assertEqual(kind, saved["state"]["reports"][-1]["kind"])
+
     def test_generation_preconditions_prevent_lost_working_state_updates(self):
         self.init()
         with self.assertRaisesRegex(state.StateError, "requires expected_generation"):

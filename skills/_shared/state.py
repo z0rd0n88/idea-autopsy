@@ -466,12 +466,24 @@ def validate_result(result, *, new_report=False, report_kind=None):
                 "mandatory model gap requires incomplete coverage and no verdict",
             )
     if new_report and (
-        (report_kind == "evaluation" and result.get("assessment_status") == "complete")
+        (
+            report_kind in ("evaluation", "stress_test", "strategy")
+            and result.get("assessment_status") == "complete"
+        )
         or result.get("verdict") is not None
     ):
+        if report_kind in ("stress_test", "strategy"):
+            require(
+                result.get("expected_model_roles"),
+                "a new complete stress test or strategy report requires an expected model role plan",
+            )
         try:
             coverage = policy.review_model_coverage(
-                result.get("expected_model_roles"), result.get("review_protocol")
+                result.get("expected_model_roles"),
+                result.get("review_protocol"),
+                require_axes=(
+                    report_kind == "evaluation" or result.get("verdict") is not None
+                ),
             )
         except policy.PolicyError as exc:
             raise StateError(str(exc)) from exc

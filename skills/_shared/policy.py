@@ -1208,12 +1208,17 @@ def model_observation(request):
                 limitation = (
                     "The host's alias resolution does not identify one model family."
                 )
-            elif requested not in families or actual != resolved:
+            elif requested not in families or actual not in (requested, resolved):
                 status = "mismatch"
                 limitation = "The exposed model or alias resolution differs from the requested model."
             else:
                 status, limitation = "compliant", None
-        elif actual == requested:
+        elif actual == requested and requested not in (
+            "opus",
+            "sonnet",
+            "haiku",
+            "fable",
+        ):
             status, limitation = "compliant", None
         elif requested in ("opus", "sonnet", "haiku", "fable"):
             status = "unknown"
@@ -1287,7 +1292,7 @@ def review_model_roles(protocol):
     return roles
 
 
-def review_model_coverage(expected_roles, protocol):
+def review_model_coverage(expected_roles, protocol, *, require_axes=True):
     """Compare the pre-dispatch role plan with post-dispatch observations."""
     roles = review_model_roles(protocol)
     expected = sequence(
@@ -1320,7 +1325,7 @@ def review_model_coverage(expected_roles, protocol):
         name = role["role"]
         require(name not in observed, "duplicate observed model role")
         observed[name] = role
-    role_gaps = set(AXES) - set(planned)
+    role_gaps = (set(AXES) - set(planned)) if require_axes else set()
     role_gaps.update(set(planned) ^ set(observed))
     model_gaps = {
         role["role"]

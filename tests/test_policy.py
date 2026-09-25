@@ -221,6 +221,42 @@ class ModelDispatchTests(unittest.TestCase):
         self.assertEqual("mismatch", observed["status"])
         self.assertFalse(observed["policy_compliant"])
 
+    def test_exposed_alias_needs_matching_resolution(self):
+        prepared = policy.execute(
+            "model_preflight",
+            {
+                "role": "risk",
+                "dispatch_path": "inline",
+                "caller_policy": {"model": "opus", "mandatory": True},
+                "host_can_select": True,
+                "host_can_reveal": True,
+            },
+        )
+        alias_only = policy.execute(
+            "model_observation", {"preflight": prepared, "actual_model": "opus"}
+        )
+        self.assertEqual("unknown", alias_only["status"])
+        self.assertFalse(alias_only["policy_compliant"])
+        resolved = policy.execute(
+            "model_observation",
+            {
+                "preflight": prepared,
+                "actual_model": "opus",
+                "host_resolved_model": "claude-opus-5-5",
+            },
+        )
+        self.assertEqual("compliant", resolved["status"])
+        self.assertTrue(resolved["policy_compliant"])
+        wrong_version = policy.execute(
+            "model_observation",
+            {
+                "preflight": prepared,
+                "actual_model": "claude-opus-5-4",
+                "host_resolved_model": "claude-opus-5-5",
+            },
+        )
+        self.assertEqual("mismatch", wrong_version["status"])
+
     def test_no_caller_policy_keeps_dispatch_default_and_records_unknown(self):
         prepared = policy.execute(
             "model_preflight",
