@@ -441,7 +441,7 @@ def validate_artifact(artifact):
     string(artifact.get("created_at"), "artifact.created_at")
 
 
-def validate_result(result):
+def validate_result(result, *, new_report=False, report_kind=None):
     if "assessment_status" in result:
         enum(result["assessment_status"], ASSESSMENTS, "assessment_status")
     if result.get("verdict") is not None:
@@ -452,7 +452,9 @@ def validate_result(result):
         )
     if "findings" in result:
         validate_findings(result["findings"])
-    if "review_protocol" in result:
+    # Older immutable reports have no pre-dispatch plan and may contain role
+    # statuses computed under earlier alias rules. Read them as history.
+    if "review_protocol" in result and (new_report or "expected_model_roles" in result):
         try:
             roles = policy.review_model_roles(result["review_protocol"])
         except policy.PolicyError as exc:
@@ -463,6 +465,20 @@ def validate_result(result):
                 and result.get("verdict") is None,
                 "mandatory model gap requires incomplete coverage and no verdict",
             )
+    if new_report and (
+        (report_kind == "evaluation" and result.get("assessment_status") == "complete")
+        or result.get("verdict") is not None
+    ):
+        try:
+            coverage = policy.review_model_coverage(
+                result.get("expected_model_roles"), result.get("review_protocol")
+            )
+        except policy.PolicyError as exc:
+            raise StateError(str(exc)) from exc
+        require(
+            not coverage["review_role_gaps"] and not coverage["model_policy_gaps"],
+            "a new complete assessment requires every expected model role and policy observation",
+        )
 
 
 def canonical_root(request):
@@ -970,6 +986,7 @@ def execute(operation, request):
                     "input_report_ids": request.get("input_report_ids", []),
                     "result": copy.deepcopy(request.get("result", {})),
                 }
+                validate_result(report["result"], new_report=True, report_kind=kind)
                 state["reports"].append(report)
                 files.append((relative, data))
                 details["report_id"] = report_id

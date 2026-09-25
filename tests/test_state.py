@@ -312,6 +312,139 @@ class StateTests(unittest.TestCase):
             saved["state"]["reports"][-1]["result"]["assessment_status"],
         )
 
+    def test_new_complete_report_rejects_an_omitted_mandatory_role(self):
+        self.init()
+        expected = [
+            {
+                "role": axis,
+                "caller_policy": (
+                    {"model": "claude-opus-5-5", "mandatory": True}
+                    if axis == "risk"
+                    else None
+                ),
+            }
+            for axis in policy.AXES
+        ]
+        observed = [
+            policy.execute(
+                "model_observation",
+                {
+                    "preflight": policy.execute(
+                        "model_preflight", {"role": axis, "dispatch_path": "inline"}
+                    ),
+                    "actual_model": "unknown",
+                },
+            )
+            for axis in policy.AXES
+            if axis != "risk"
+        ]
+        for protocol in (None, {"roles": observed}):
+            with self.subTest(protocol=protocol):
+                result = {
+                    "expected_model_roles": expected,
+                    "assessment_status": "complete",
+                    "verdict": "Invest",
+                }
+                if protocol is not None:
+                    result["review_protocol"] = protocol
+                with self.assertRaises(state.StateError):
+                    self.call(
+                        "report",
+                        version="v1",
+                        kind="evaluation",
+                        text="Verdict",
+                        result=result,
+                    )
+        self.assertEqual([], self.call("status")["state"]["reports"])
+
+    def test_new_complete_report_needs_a_role_plan_but_legacy_results_remain_readable(
+        self,
+    ):
+        self.init()
+        observed = [
+            policy.execute(
+                "model_observation",
+                {
+                    "preflight": policy.execute(
+                        "model_preflight", {"role": axis, "dispatch_path": "inline"}
+                    ),
+                    "actual_model": "unknown",
+                },
+            )
+            for axis in policy.AXES
+        ]
+        legacy_result = {
+            "assessment_status": "complete",
+            "verdict": "Invest",
+            "review_protocol": {"roles": observed},
+        }
+        state.validate_result(legacy_result)
+        with self.assertRaisesRegex(state.StateError, "expected model role"):
+            self.call(
+                "report",
+                version="v1",
+                kind="evaluation",
+                text="New verdict",
+                result=legacy_result,
+            )
+        self.assertEqual([], self.call("status")["state"]["reports"])
+
+    def test_historical_alias_observation_remains_readable(self):
+        prepared = policy.execute(
+            "model_preflight",
+            {
+                "role": "risk",
+                "dispatch_path": "inline",
+                "caller_policy": {"model": "opus", "mandatory": True},
+                "host_can_select": True,
+                "host_can_reveal": True,
+            },
+        )
+        legacy_role = policy.execute(
+            "model_observation",
+            {
+                "preflight": prepared,
+                "actual_model": "claude-haiku-5",
+                "host_resolved_model": "claude-haiku-5",
+            },
+        )
+        legacy_role.update(status="compliant", policy_compliant=True, limitation=None)
+        state.validate_result(
+            {
+                "assessment_status": "complete",
+                "verdict": "Invest",
+                "review_protocol": {"roles": [legacy_role]},
+            }
+        )
+
+    def test_complete_strategy_without_business_verdict_does_not_need_four_axes(self):
+        self.init()
+        role = policy.execute(
+            "model_observation",
+            {
+                "preflight": policy.execute(
+                    "model_preflight",
+                    {"role": "product-strategist", "dispatch_path": "registered"},
+                ),
+                "actual_model": "unknown",
+            },
+        )
+        saved = self.call(
+            "report",
+            version="v1",
+            kind="strategy",
+            text="Strategy options",
+            result={
+                "assessment_status": "complete",
+                "verdict": None,
+                "expected_model_roles": [
+                    {"role": "product-strategist", "caller_policy": None}
+                ],
+                "review_protocol": {"roles": [role]},
+            },
+        )
+        self.assertEqual("strategy", saved["state"]["reports"][-1]["kind"])
+
     def test_generation_preconditions_prevent_lost_working_state_updates(self):
         self.init()
         with self.assertRaisesRegex(state.StateError, "requires expected_generation"):

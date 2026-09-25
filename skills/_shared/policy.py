@@ -415,14 +415,11 @@ def verdict(request):
         "invalid coverage status",
     )
     review_protocol = request.get("review_protocol")
-    model_roles = review_model_roles(review_protocol)
-    model_gaps = sorted(
-        {
-            role["role"]
-            for role in model_roles
-            if role["mandatory"] and not role["policy_compliant"]
-        }
+    model_coverage = review_model_coverage(
+        request.get("expected_model_roles"), review_protocol
     )
+    model_gaps = model_coverage["model_policy_gaps"]
+    review_role_gaps = model_coverage["review_role_gaps"]
     evidence = obj(request.get("decision_evidence", {}), "decision_evidence")
     sufficient = boolean(
         evidence.get("sufficient", False), "decision_evidence.sufficient"
@@ -507,15 +504,25 @@ def verdict(request):
         "independence_evidence": deepcopy(independence),
         "unresolved_dependence": unresolved_dependence,
         "model_policy_gaps": model_gaps,
+        "review_role_gaps": review_role_gaps,
+        "expected_model_roles": deepcopy(request.get("expected_model_roles") or []),
     }
     if review_protocol is not None:
         result["review_protocol"] = deepcopy(review_protocol)
-    if model_gaps:
+    if model_gaps or review_role_gaps:
+        reasons = []
+        if model_gaps:
+            reasons.append(
+                "Mandatory model policy was not confirmed for: " + ", ".join(model_gaps)
+            )
+        if review_role_gaps:
+            reasons.append(
+                "Expected review roles were not observed with their declared policies: "
+                + ", ".join(review_role_gaps)
+            )
         result.update(
             assessment_status="incomplete_coverage",
-            reasons=[
-                "Mandatory model policy was not confirmed for: " + ", ".join(model_gaps)
-            ],
+            reasons=reasons,
         )
     elif any(value != "complete" for value in coverage.values()):
         result.update(
@@ -1190,7 +1197,23 @@ def model_observation(request):
     if status == "ready":
         if actual == "unknown":
             status, limitation = "unknown", "The host did not expose the actual model."
-        elif actual == requested or (resolved is not None and actual == resolved):
+        elif resolved is not None and requested in ("opus", "sonnet", "haiku", "fable"):
+            families = {
+                family
+                for family in ("opus", "sonnet", "haiku", "fable")
+                if re.search(rf"(?<![a-z]){family}(?![a-z])", resolved.casefold())
+            }
+            if len(families) != 1:
+                status = "unknown"
+                limitation = (
+                    "The host's alias resolution does not identify one model family."
+                )
+            elif requested not in families or actual != resolved:
+                status = "mismatch"
+                limitation = "The exposed model or alias resolution differs from the requested model."
+            else:
+                status, limitation = "compliant", None
+        elif actual == requested:
             status, limitation = "compliant", None
         elif requested in ("opus", "sonnet", "haiku", "fable"):
             status = "unknown"
@@ -1262,6 +1285,66 @@ def review_model_roles(protocol):
         )
         require(role == observed, "review_protocol role record is inconsistent")
     return roles
+
+
+def review_model_coverage(expected_roles, protocol):
+    """Compare the pre-dispatch role plan with post-dispatch observations."""
+    roles = review_model_roles(protocol)
+    expected = sequence(
+        [] if expected_roles is None else expected_roles, "expected_model_roles"
+    )
+    planned = {}
+    for item in expected:
+        item = obj(item, "expected_model_roles entry")
+        require(
+            set(item) == {"role", "caller_policy"},
+            "expected_model_roles entry needs role and caller_policy",
+        )
+        name = nonempty(item["role"], "expected_model_roles.role")
+        require(name not in planned, "duplicate expected model role")
+        caller_policy = item["caller_policy"]
+        if caller_policy is None:
+            planned[name] = (None, False)
+        else:
+            caller_policy = obj(caller_policy, "expected_model_roles.caller_policy")
+            require(
+                set(caller_policy) == {"model", "mandatory"},
+                "expected caller policy needs model and mandatory",
+            )
+            planned[name] = (
+                nonempty(caller_policy["model"], "expected model").strip(),
+                boolean(caller_policy["mandatory"], "expected mandatory"),
+            )
+    observed = {}
+    for role in roles:
+        name = role["role"]
+        require(name not in observed, "duplicate observed model role")
+        observed[name] = role
+    role_gaps = set(AXES) - set(planned)
+    role_gaps.update(set(planned) ^ set(observed))
+    model_gaps = {
+        role["role"]
+        for role in roles
+        if role["mandatory"] and not role["policy_compliant"]
+    }
+    for name, (requested, mandatory) in planned.items():
+        role = observed.get(name)
+        if role is None:
+            if mandatory:
+                model_gaps.add(name)
+            continue
+        if not role["dispatch_allowed"]:
+            role_gaps.add(name)
+        if (role["requested_model"], role["mandatory"]) != (requested, mandatory):
+            role_gaps.add(name)
+            if mandatory:
+                model_gaps.add(name)
+        elif mandatory and not role["policy_compliant"]:
+            model_gaps.add(name)
+    return {
+        "review_role_gaps": sorted(role_gaps),
+        "model_policy_gaps": sorted(model_gaps),
+    }
 
 
 OPERATIONS = {
