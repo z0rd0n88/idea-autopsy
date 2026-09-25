@@ -469,8 +469,7 @@ class StateTests(unittest.TestCase):
                                 "review_protocol": {"roles": []},
                             },
                         )
-        self.assertEqual([], self.call("status")["state"]["reports"])
-        observed = policy.execute(
+        unrelated = policy.execute(
             "model_observation",
             {
                 "preflight": policy.execute(
@@ -480,6 +479,42 @@ class StateTests(unittest.TestCase):
             },
         )
         for kind in ("stress_test", "strategy"):
+            with self.subTest(kind=kind, unrelated_role=True):
+                with self.assertRaises(state.StateError):
+                    self.call(
+                        "report",
+                        version="v1",
+                        kind=kind,
+                        text="Unrelated role",
+                        result={
+                            "assessment_status": "complete",
+                            "verdict": None,
+                            "expected_model_roles": [
+                                {"role": "risk", "caller_policy": None}
+                            ],
+                            "review_protocol": {"roles": [unrelated]},
+                        },
+                    )
+        self.assertEqual([], self.call("status")["state"]["reports"])
+        required_roles = {
+            "stress_test": ("A", "B", "C"),
+            "strategy": ("product-strategist",),
+        }
+        for kind in ("stress_test", "strategy"):
+            roles = required_roles[kind]
+            observed = [
+                policy.execute(
+                    "model_observation",
+                    {
+                        "preflight": policy.execute(
+                            "model_preflight",
+                            {"role": role, "dispatch_path": "inline"},
+                        ),
+                        "actual_model": "unknown",
+                    },
+                )
+                for role in roles
+            ]
             saved = self.call(
                 "report",
                 version="v1",
@@ -488,11 +523,51 @@ class StateTests(unittest.TestCase):
                 result={
                     "assessment_status": "complete",
                     "verdict": None,
-                    "expected_model_roles": [{"role": "risk", "caller_policy": None}],
-                    "review_protocol": {"roles": [observed]},
+                    "expected_model_roles": [
+                        {"role": role, "caller_policy": None} for role in roles
+                    ],
+                    "review_protocol": {"roles": observed},
                 },
             )
             self.assertEqual(kind, saved["state"]["reports"][-1]["kind"])
+
+    def test_missing_planned_role_requires_incomplete_coverage_status(self):
+        self.init()
+        result = {
+            "expected_model_roles": [
+                {
+                    "role": "risk",
+                    "caller_policy": {"model": "opus", "mandatory": True},
+                }
+            ],
+            "review_protocol": {"roles": []},
+            "verdict": None,
+        }
+        for kind in ("stress_test", "strategy"):
+            for status in ("insufficient_evidence", None):
+                with self.subTest(kind=kind, status=status):
+                    attempt = {**result}
+                    if status is not None:
+                        attempt["assessment_status"] = status
+                    with self.assertRaises(state.StateError):
+                        self.call(
+                            "report",
+                            version="v1",
+                            kind=kind,
+                            text="Missing role mislabeled",
+                            result=attempt,
+                        )
+            saved = self.call(
+                "report",
+                version="v1",
+                kind=kind,
+                text="Missing role disclosed",
+                result={**result, "assessment_status": "incomplete_coverage"},
+            )
+            self.assertEqual(
+                "incomplete_coverage",
+                saved["state"]["reports"][-1]["result"]["assessment_status"],
+            )
 
     def test_generation_preconditions_prevent_lost_working_state_updates(self):
         self.init()

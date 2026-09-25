@@ -1292,7 +1292,7 @@ def review_model_roles(protocol):
     return roles
 
 
-def review_model_coverage(expected_roles, protocol, *, require_axes=True):
+def review_model_coverage(expected_roles, protocol, *, required_roles=AXES):
     """Compare the pre-dispatch role plan with post-dispatch observations."""
     roles = review_model_roles(protocol)
     expected = sequence(
@@ -1325,7 +1325,7 @@ def review_model_coverage(expected_roles, protocol, *, require_axes=True):
         name = role["role"]
         require(name not in observed, "duplicate observed model role")
         observed[name] = role
-    role_gaps = (set(AXES) - set(planned)) if require_axes else set()
+    role_gaps = set(required_roles) - set(planned)
     role_gaps.update(set(planned) ^ set(observed))
     model_gaps = {
         role["role"]

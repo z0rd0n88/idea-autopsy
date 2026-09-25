@@ -57,6 +57,11 @@ PATCH_FIELDS = {
     "experiments",
 }
 ASSESSMENTS = {"complete", "insufficient_evidence", "incomplete_coverage"}
+CORE_MODEL_ROLES = {
+    "evaluation": policy.AXES,
+    "stress_test": ("A", "B", "C"),
+    "strategy": ("product-strategist",),
+}
 VERDICTS = {"Invest", "Proceed with caution", "Pivot", "Skip"}
 REQUEST_FIELDS = {
     "init": {"text", "investment_context"},
@@ -465,31 +470,32 @@ def validate_result(result, *, new_report=False, report_kind=None):
                 and result.get("verdict") is None,
                 "mandatory model gap requires incomplete coverage and no verdict",
             )
+    model_metadata = "expected_model_roles" in result or "review_protocol" in result
     if new_report and (
-        (
-            report_kind in ("evaluation", "stress_test", "strategy")
-            and result.get("assessment_status") == "complete"
+        result.get("verdict") is not None
+        or (
+            report_kind in CORE_MODEL_ROLES
+            and (result.get("assessment_status") is not None or model_metadata)
         )
-        or result.get("verdict") is not None
     ):
-        if report_kind in ("stress_test", "strategy"):
-            require(
-                result.get("expected_model_roles"),
-                "a new complete stress test or strategy report requires an expected model role plan",
-            )
+        required_roles = set(CORE_MODEL_ROLES.get(report_kind, ()))
+        if result.get("verdict") is not None:
+            required_roles.update(policy.AXES)
         try:
             coverage = policy.review_model_coverage(
                 result.get("expected_model_roles"),
                 result.get("review_protocol"),
-                require_axes=(
-                    report_kind == "evaluation" or result.get("verdict") is not None
-                ),
+                required_roles=required_roles,
             )
         except policy.PolicyError as exc:
             raise StateError(str(exc)) from exc
         require(
-            not coverage["review_role_gaps"] and not coverage["model_policy_gaps"],
-            "a new complete assessment requires every expected model role and policy observation",
+            not (coverage["review_role_gaps"] or coverage["model_policy_gaps"])
+            or (
+                result.get("assessment_status") == "incomplete_coverage"
+                and result.get("verdict") is None
+            ),
+            "expected model role or policy gaps require incomplete coverage and no verdict",
         )
 
 
