@@ -59,7 +59,7 @@ PATCH_FIELDS = {
 ASSESSMENTS = {"complete", "insufficient_evidence", "incomplete_coverage"}
 CORE_MODEL_ROLES = {
     "evaluation": policy.AXES,
-    "stress_test": ("A", "B", "C"),
+    "stress_test": ("A", "B", "C", "verifier"),
     "strategy": ("product-strategist",),
 }
 VERDICTS = {"Invest", "Proceed with caution", "Pivot", "Skip"}
@@ -471,6 +471,15 @@ def validate_result(result, *, new_report=False, report_kind=None):
         )
     if "findings" in result:
         validate_findings(result["findings"])
+    if (
+        new_report
+        and report_kind == "evaluation"
+        and result.get("assessment_status") == "complete"
+    ):
+        require(
+            "findings" in result,
+            "new complete evaluation requires findings for verifier coverage",
+        )
     # Older immutable reports have no pre-dispatch plan and may contain role
     # statuses computed under earlier alias rules. Read them as history.
     if "review_protocol" in result and (new_report or "expected_model_roles" in result):
@@ -493,6 +502,10 @@ def validate_result(result, *, new_report=False, report_kind=None):
         )
     ):
         required_roles = set(CORE_MODEL_ROLES.get(report_kind, ()))
+        if report_kind == "evaluation" and policy.verifier_required(
+            result.get("findings", [])
+        ):
+            required_roles.add("verifier")
         if result.get("verdict") is not None:
             required_roles.update(policy.AXES)
         try:
@@ -509,7 +522,8 @@ def validate_result(result, *, new_report=False, report_kind=None):
                 result.get("assessment_status") == "incomplete_coverage"
                 and result.get("verdict") is None
             ),
-            "expected model role or policy gaps require incomplete coverage and no verdict",
+            "expected model role or policy gaps require incomplete coverage and no verdict: "
+            + ", ".join(coverage["review_role_gaps"] + coverage["model_policy_gaps"]),
         )
 
 

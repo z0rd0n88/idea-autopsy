@@ -521,7 +521,7 @@ class StateTests(unittest.TestCase):
                     )
         self.assertEqual([], self.call("status")["state"]["reports"])
         required_roles = {
-            "stress_test": ("A", "B", "C"),
+            "stress_test": ("A", "B", "C", "verifier"),
             "strategy": ("product-strategist",),
         }
         for kind in ("stress_test", "strategy"):
@@ -554,6 +554,88 @@ class StateTests(unittest.TestCase):
                 },
             )
             self.assertEqual(kind, saved["state"]["reports"][-1]["kind"])
+
+    def test_new_complete_evaluation_and_stress_test_require_verifier(self):
+        self.init()
+        finding = json.loads(
+            (SHARED.parents[1] / "tests/fixtures/workflow_cases.json").read_text()
+        )["base_finding"]
+        for kind, roles in (
+            ("evaluation", policy.AXES),
+            ("stress_test", ("A", "B", "C")),
+        ):
+            observed = [
+                policy.execute(
+                    "model_observation",
+                    {
+                        "preflight": policy.execute(
+                            "model_preflight",
+                            {"role": role, "dispatch_path": "inline"},
+                        ),
+                        "actual_model": "unknown",
+                    },
+                )
+                for role in roles
+            ]
+            with self.subTest(kind=kind):
+                with self.assertRaisesRegex(state.StateError, "verifier"):
+                    self.call(
+                        "report",
+                        version="v1",
+                        kind=kind,
+                        text="Unverified decision-driving finding",
+                        result={
+                            "assessment_status": "complete",
+                            "verdict": (
+                                "Proceed with caution" if kind == "evaluation" else None
+                            ),
+                            "findings": [finding],
+                            "expected_model_roles": [
+                                {"role": role, "caller_policy": None} for role in roles
+                            ],
+                            "review_protocol": {"roles": observed},
+                        },
+                    )
+
+    def test_complete_evaluation_declares_when_there_are_no_findings(self):
+        self.init()
+        observed = [
+            policy.execute(
+                "model_observation",
+                {
+                    "preflight": policy.execute(
+                        "model_preflight",
+                        {"role": role, "dispatch_path": "inline"},
+                    ),
+                    "actual_model": "unknown",
+                },
+            )
+            for role in policy.AXES
+        ]
+        result = {
+            "assessment_status": "complete",
+            "verdict": "Invest",
+            "expected_model_roles": [
+                {"role": role, "caller_policy": None} for role in policy.AXES
+            ],
+            "review_protocol": {"roles": observed},
+        }
+        with self.assertRaisesRegex(state.StateError, "findings"):
+            self.call(
+                "report",
+                version="v1",
+                kind="evaluation",
+                text="Missing findings declaration",
+                result=result,
+            )
+        saved = self.call(
+            "report",
+            version="v1",
+            kind="evaluation",
+            text="Explicitly no findings",
+            result={**result, "findings": []},
+        )
+        self.assertEqual("evaluation", saved["state"]["reports"][-1]["kind"])
 
     def test_missing_planned_role_requires_incomplete_coverage_status(self):
         self.init()

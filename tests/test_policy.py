@@ -26,21 +26,25 @@ def finding(**changes):
 
 
 def assessment(findings=None, **changes):
-    expected = [{"role": axis, "caller_policy": None} for axis in policy.AXES]
+    selected_findings = [] if findings is None else findings
+    roles = list(policy.AXES)
+    if policy.verifier_required(selected_findings):
+        roles.append("verifier")
+    expected = [{"role": role, "caller_policy": None} for role in roles]
     observed = [
         policy.execute(
             "model_observation",
             {
                 "preflight": policy.execute(
-                    "model_preflight", {"role": axis, "dispatch_path": "inline"}
+                    "model_preflight", {"role": role, "dispatch_path": "inline"}
                 ),
                 "actual_model": "unknown",
             },
         )
-        for axis in policy.AXES
+        for role in roles
     ]
     result = {
-        "findings": [] if findings is None else findings,
+        "findings": selected_findings,
         "coverage": deepcopy(FIXTURE["coverage"]),
         "decision_evidence": deepcopy(FIXTURE["evidence"]),
         "expected_model_roles": expected,
@@ -273,6 +277,34 @@ class ModelDispatchTests(unittest.TestCase):
 
 
 class VerdictTests(unittest.TestCase):
+    def test_decision_driving_finding_requires_a_planned_verifier(self):
+        for changes in (
+            {"severity": "High"},
+            {"severity": "Medium", "affects_decision": True},
+        ):
+            with self.subTest(changes=changes):
+                request = assessment([finding(**changes)])
+                request["expected_model_roles"] = [
+                    item
+                    for item in request["expected_model_roles"]
+                    if item["role"] != "verifier"
+                ]
+                request["review_protocol"]["roles"] = [
+                    item
+                    for item in request["review_protocol"]["roles"]
+                    if item["role"] != "verifier"
+                ]
+                result = policy.execute("verdict", request)
+                self.assertEqual("incomplete_coverage", result["assessment_status"])
+                self.assertIsNone(result["verdict"])
+                self.assertIn("verifier", result["review_role_gaps"])
+        no_verifier_needed = policy.execute(
+            "verdict",
+            assessment([finding(severity="Medium", affects_decision=False)]),
+        )
+        self.assertEqual("complete", no_verifier_needed["assessment_status"])
+        self.assertNotIn("verifier", no_verifier_needed["review_role_gaps"])
+
     def test_missing_mandatory_role_cannot_complete_a_verdict(self):
         expected = [
             {

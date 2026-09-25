@@ -415,8 +415,13 @@ def verdict(request):
         "invalid coverage status",
     )
     review_protocol = request.get("review_protocol")
+    required_roles = set(AXES)
+    if verifier_required(normalized["findings"]):
+        required_roles.add("verifier")
     model_coverage = review_model_coverage(
-        request.get("expected_model_roles"), review_protocol
+        request.get("expected_model_roles"),
+        review_protocol,
+        required_roles=required_roles,
     )
     model_gaps = model_coverage["model_policy_gaps"]
     review_role_gaps = model_coverage["review_role_gaps"]
@@ -505,6 +510,7 @@ def verdict(request):
         "unresolved_dependence": unresolved_dependence,
         "model_policy_gaps": model_gaps,
         "review_role_gaps": review_role_gaps,
+        "findings": deepcopy(findings),
         "expected_model_roles": deepcopy(request.get("expected_model_roles") or []),
     }
     if review_protocol is not None:
@@ -1290,6 +1296,14 @@ def review_model_roles(protocol):
         )
         require(role == observed, "review_protocol role record is inconsistent")
     return roles
+
+
+def verifier_required(findings):
+    """A fresh verifier covers consequential or severe findings."""
+    return any(
+        finding["severity"] in ("Critical", "High") or finding["affects_decision"]
+        for finding in findings
+    )
 
 
 def review_model_coverage(expected_roles, protocol, *, required_roles=AXES):
