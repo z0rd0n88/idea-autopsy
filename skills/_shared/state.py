@@ -447,6 +447,20 @@ def validate_artifact(artifact):
 
 
 def validate_result(result, *, new_report=False, report_kind=None):
+    if new_report and report_kind in CORE_MODEL_ROLES:
+        require(
+            "assessment_status" in result,
+            "new judgment report requires assessment_status",
+        )
+        require(
+            "expected_model_roles" in result,
+            "new judgment report requires expected model role plan",
+        )
+        require(
+            isinstance(result.get("review_protocol"), dict)
+            and "roles" in result["review_protocol"],
+            "new judgment report requires review_protocol.roles",
+        )
     if "assessment_status" in result:
         enum(result["assessment_status"], ASSESSMENTS, "assessment_status")
     if result.get("verdict") is not None:

@@ -873,7 +873,12 @@ class IntegrationTests(unittest.TestCase):
                     "version": "v1",
                     "kind": "stress_test",
                     "text": "Synthetic findings\n" + json.dumps(findings),
-                    "result": {"findings": findings},
+                    "result": {
+                        "findings": findings,
+                        "assessment_status": "incomplete_coverage",
+                        "expected_model_roles": [],
+                        "review_protocol": {"roles": []},
+                    },
                 },
             )
             prior_report = reviewed["state"]["reports"][-1]

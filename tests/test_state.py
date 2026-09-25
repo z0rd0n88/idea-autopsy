@@ -31,6 +31,14 @@ class StateTests(unittest.TestCase):
         return state.execute(operation, {**self.request, **fields})
 
     def report(self, text="Review", **fields):
+        fields.setdefault(
+            "result",
+            {
+                "assessment_status": "incomplete_coverage",
+                "expected_model_roles": [],
+                "review_protocol": {"roles": []},
+            },
+        )
         return self.call(
             "report", version="v1", kind="stress_test", text=text, **fields
         )
@@ -240,7 +248,14 @@ class StateTests(unittest.TestCase):
 
     def test_report_hashes_unique_ids_and_upstream_report_links(self):
         self.init()
-        first = self.report(result={"summary": "first pass"})["state"]["reports"][-1]
+        first = self.report(
+            result={
+                "summary": "first pass",
+                "assessment_status": "incomplete_coverage",
+                "expected_model_roles": [],
+                "review_protocol": {"roles": []},
+            }
+        )["state"]["reports"][-1]
         second = self.report("Second review", input_report_ids=[first["id"]])["state"][
             "reports"
         ][-1]
@@ -277,6 +292,12 @@ class StateTests(unittest.TestCase):
                 "host_can_reveal": True,
             },
         )
+        expected = [
+            {
+                "role": "risk",
+                "caller_policy": {"model": "claude-opus-5-5", "mandatory": True},
+            }
+        ]
         for actual in ("unknown", "claude-sonnet-5"):
             with self.subTest(actual=actual):
                 role = policy.execute(
@@ -288,6 +309,7 @@ class StateTests(unittest.TestCase):
                         result={
                             "assessment_status": "complete",
                             "verdict": "Invest",
+                            "expected_model_roles": expected,
                             "review_protocol": {"roles": [role]},
                         }
                     )
@@ -297,6 +319,7 @@ class StateTests(unittest.TestCase):
                 result={
                     "assessment_status": "insufficient_evidence",
                     "verdict": None,
+                    "expected_model_roles": expected,
                     "review_protocol": {"roles": [role]},
                 }
             )
@@ -304,6 +327,7 @@ class StateTests(unittest.TestCase):
             result={
                 "assessment_status": "incomplete_coverage",
                 "verdict": None,
+                "expected_model_roles": expected,
                 "review_protocol": {"roles": [role]},
             }
         )
@@ -569,6 +593,31 @@ class StateTests(unittest.TestCase):
                 saved["state"]["reports"][-1]["result"]["assessment_status"],
             )
 
+    def test_new_judgment_reports_require_explicit_coverage_fields(self):
+        self.init()
+        missing_fields = (
+            {},
+            {"assessment_status": "incomplete_coverage"},
+            {"assessment_status": "incomplete_coverage", "expected_model_roles": []},
+            {
+                "assessment_status": "incomplete_coverage",
+                "review_protocol": {"roles": []},
+            },
+        )
+        for kind in ("evaluation", "stress_test", "strategy"):
+            for result in missing_fields:
+                with self.subTest(kind=kind, result=result):
+                    with self.assertRaises(state.StateError):
+                        self.call(
+                            "report",
+                            version="v1",
+                            kind=kind,
+                            text="Narrative without complete provenance",
+                            result=result,
+                        )
+        self.assertEqual([], self.call("status")["state"]["reports"])
+        state.validate_result({}, new_report=False, report_kind="evaluation")
+
     def test_generation_preconditions_prevent_lost_working_state_updates(self):
         self.init()
         with self.assertRaisesRegex(state.StateError, "requires expected_generation"):
@@ -810,6 +859,11 @@ class StateTests(unittest.TestCase):
                 "version": "v1",
                 "kind": "stress_test",
                 "text": f"review {index}",
+                "result": {
+                    "assessment_status": "incomplete_coverage",
+                    "expected_model_roles": [],
+                    "review_protocol": {"roles": []},
+                },
             }
             process = subprocess.Popen(
                 [sys.executable, str(SHARED / "state.py"), "report", "--request", "-"],
