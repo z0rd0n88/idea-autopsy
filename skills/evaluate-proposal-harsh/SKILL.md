@@ -1,6 +1,6 @@
 ---
 name: evaluate-proposal-harsh
-description: Assess whether a product or business proposal supports a stated commitment, using verified reasoning, explicit evidence gaps and an auditable Invest, Caution, Pivot or Skip decision.
+description: Assess whether a proposal supports a commitment using verified reasoning, evidence gaps, and an auditable Invest, Caution, Pivot, or Skip decision. Part of the Idea Autopsy skillset.
 ---
 
 # Evaluate proposal
