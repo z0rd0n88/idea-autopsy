@@ -1,6 +1,6 @@
 ---
 name: stress-test-idea
-description: Find evidence-backed weaknesses in a product or business proposal with complementary reviewers, then prioritize substantive changes for an agent-written revision.
+description: Find evidence-backed proposal weaknesses with complementary reviewers, then prioritize substantive changes for agent-led revision. Part of the Idea Autopsy skillset.
 ---
 
 # Stress test idea

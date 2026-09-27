@@ -1,6 +1,6 @@
 ---
 name: strategize-from-verdict
-description: Develop evidence-grounded strategic options from an idea assessment, ask for consequential choices, and hand the selected path to the agent for an automatic revision.
+description: Develop evidence-grounded options from an assessment, ask about consequential choices, and hand the selected path to the agent for revision. Part of the Idea Autopsy skillset.
 ---
 
 # Strategize from assessment

@@ -1,6 +1,6 @@
 ---
 name: iterate-to-v2
-description: Write a revised idea proposal and traceable change record from verified critique, asking the user for consequential choices and missing facts while handling routine corrections automatically.
+description: Write a revised proposal and change record from verified critique, asking about consequential choices and missing facts while handling routine corrections. Part of the Idea Autopsy skillset.
 ---
 
 # Iterate to the next version
