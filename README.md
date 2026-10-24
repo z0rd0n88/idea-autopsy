@@ -56,7 +56,7 @@ Snapshots, reports, hashes, context, answers and history survive repeated review
 
 ## Install and update
 
-This repository is a standalone plugin; it does not require the ClaudesMods marketplace.
+This repository is a standalone plugin; it does not require the Z0rd0nZords marketplace.
 
 ```bash
 claude plugin marketplace add z0rd0n88/idea-autopsy
