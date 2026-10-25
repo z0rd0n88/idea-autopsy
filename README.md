@@ -8,7 +8,7 @@ proposal → stress test → user choices when needed → agent revision → eva
                                                         strategy / evidence / stop
 ```
 
-## Four modes
+## Five modes
 
 | Skill | Input | Output |
 |---|---|---|
@@ -16,6 +16,7 @@ proposal → stress test → user choices when needed → agent revision → eva
 | [iterate-to-v2](skills/iterate-to-v2/SKILL.md) | Source and final critique | Agent-written proposal plus traceable change record |
 | [evaluate-proposal-harsh](skills/evaluate-proposal-harsh/SKILL.md) | Proposal and scoped commitment | Assessment status and, when justified, Invest / Proceed with caution / Pivot / Skip |
 | [strategize-from-verdict](skills/strategize-from-verdict/SKILL.md) | Assessment, findings and assets | Concrete options, user choices and revision handoff |
+| [hackathon-judge](skills/hackathon-judge/SKILL.md) | Idea plus the event's rules and constraints | Separate build and win verdicts, a rubric, judge scorecards and an hour-by-hour plan |
 
 The historical names remain available. Missing numbers, a short pitch or an unavailable reviewer do not automatically mean Skip. Insufficient evidence and incomplete coverage are separate assessment statuses with no business verdict.
 
