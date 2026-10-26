@@ -1,4 +1,4 @@
-# CLAUDE.md
+# AGENTS.md
 
 ## Versioning: bump on every content change
 

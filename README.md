@@ -104,7 +104,7 @@ claude plugin validate .
 
 The first command tests deterministic behavior and fixtures. The second checks package structure when Claude Code is installed. Neither establishes whether a model reliably judges evidence, classifies consequential changes or produces better ideas; actual model-based evaluations must be reported separately.
 
-See [CLAUDE.md](CLAUDE.md) for contributor workflow and paired version bumps. It is contributor documentation, not automatically loaded plugin context; the skills explicitly load their shared runtime contract. The plugin validator may warn about that preserved root file.
+See [AGENTS.md](AGENTS.md) for contributor workflow and paired version bumps. It is contributor documentation, not automatically loaded plugin context; the skills explicitly load their shared runtime contract. The plugin validator may warn about that preserved root file.
 
 ## Research-informed review and validation
 
