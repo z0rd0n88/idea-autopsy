@@ -42,13 +42,13 @@ Not a code task. Run from the primary checkout `/home/alex/idea-autopsy`, never 
 
 **Files:** none in this repo beyond the merge; `plugin.json`, `marketplace.json`, `README.md` in the new business clone.
 
-- [ ] **Step 1: Merge `feat/hackathon-judge` into `main` via PR**
+- [ ] **Step 0: Drop the stale tracked gitlink**
 
-```bash
-cd /home/alex/idea-autopsy/.worktrees/hackathon-judge && git push -u origin feat/hackathon-judge && gh pr create --fill --title "feat: add hackathon-judge skill" --body "Adds the hackathon-judge skill. Merged before the repo split so idea-autopsy-business keeps it."
-```
+`.worktrees/evidence-driven-idea-loop` is tracked as a gitlink (mode 160000) with no `.gitmodules`; a fresh clone gets an empty directory and a warning. On a branch `chore/untrack-stale-worktree`: `git rm --cached .worktrees/evidence-driven-idea-loop`, add a root `.gitignore` containing `.worktrees/` and `__pycache__/`, commit, PR, merge, clean up.
 
-Then from the primary checkout: `gh pr merge <n> --squash`, `git pull --ff-only`, `git worktree remove .worktrees/hackathon-judge`, `git branch -D feat/hackathon-judge`, `git push origin --delete feat/hackathon-judge`.
+- [ ] **Step 1: Merge the existing hackathon-judge PR**
+
+A PR for `feat/hackathon-judge` already exists: [z0rd0n88/idea-autopsy#16](https://github.com/z0rd0n88/idea-autopsy/pull/16). From the primary checkout: `gh pr merge 16 --squash`, `git pull --ff-only`, `git worktree remove .worktrees/hackathon-judge`, `git branch -D feat/hackathon-judge`, `git push origin --delete feat/hackathon-judge`.
 
 - [ ] **Step 2: Remove the empty worktree**
 
@@ -78,8 +78,8 @@ In the clone, on branch `chore/rename-to-business`: set `name` to `idea-autopsy-
 
 - [ ] **Step 6: Verify both plugins resolve**
 
-Run: `claude plugin marketplace add z0rd0n88/idea-autopsy-business && claude plugin install idea-autopsy-business@idea-autopsy-business`
-Expected: install succeeds; `/autopsy --help` from the business plugin still shows the four business skills.
+Run: `claude plugin marketplace add z0rd0n88/idea-autopsy-business && claude plugin install idea-autopsy-business@idea-autopsy-business && claude plugin details idea-autopsy-business`
+Expected: install succeeds; the details inventory lists five skills (the four business ones plus `hackathon-judge`) and the `autopsy` command. Then in a scratch project, `/idea-autopsy-business:autopsy --slug nothing --status` returns a read-only "no state" answer without creating files.
 
 ---
 
@@ -125,9 +125,9 @@ def test_categories_are_routine_scope_approach(self):
 
 - [ ] **Step 3: Run** `python3 -m pytest tests/test_policy.py -k FindingSchema -q`. Expected: 4 failures.
 
-- [ ] **Step 4: Implement** the constants, `validate_finding(value, lenses=FIXED_LENSES)`, and thread `request.get("lenses")` through `normalize` into every `validate_finding` call. Delete `AXES` and `VERDICTS`. Existing tests that reference `AXES`, `thesis_breaking`, `plausibly_resolvable`, `Invest` etc. will now fail; they are rewritten in Tasks 3 and 5, so mark them `@unittest.skip("rewritten in Task 3/5")` for this commit only, listing each in the commit body.
+- [ ] **Step 4: Implement** the constants, `validate_finding(value, lenses=FIXED_LENSES)`, and thread `request.get("lenses")` through `normalize` into every `validate_finding` call. Delete `VERDICTS`. Keep `AXES = FIXED_LENSES` as a one-line alias with the comment `# removed in Task 4 once state.py stops importing it`, because `state.py:61` reads `policy.AXES` at import time. Existing tests that reference `thesis_breaking`, `plausibly_resolvable`, `Invest` etc. will now fail; the verdict and route tests are rewritten in Tasks 2 and 5, so mark them `@unittest.skip("rewritten in Task 2/5")` for this commit only, listing each in the commit body. Delete outright `test_worked_example_hashes_and_output_contracts`, `test_worked_example_economics_match_the_fixture_text` and `test_fixture_arithmetic` (they read the business examples) and remove `arithmetic_cases` and `evidence` from the fixture.
 
-- [ ] **Step 5: Run** `python3 -m pytest -q`. Expected: new tests pass; skipped tests listed; nothing else fails.
+- [ ] **Step 5: Run** `python3 -m pytest -q`. Expected: new tests pass; skipped tests listed; `tests/test_state.py` still imports and passes; nothing else fails.
 
 - [ ] **Step 6: Commit** `git add skills/_shared/policy.py tests/test_policy.py tests/fixtures/workflow_cases.json` / `git commit -m "feat(policy): brief-driven lens and category vocabulary"`.
 
@@ -155,7 +155,7 @@ Derivation (from the spec, in this order):
 6. Decision: `cannot_judge` if fit or feasibility is `cannot_judge`; `no` if fit `does_not_meet` or feasibility `not_achievable`; `not_yet` if fit `partly_meets` or feasibility `achievable_with_changes`; else `yes`.
 7. Override requires `assessment_status == complete`, a nonempty reason and sources; it may change any label to any valid value; `mechanical` keeps the pre-override labels.
 
-- [ ] **Step 1: Rewrite the fixture**: replace `verdict_cases` with `judgment_cases`, each `{name, request, expected: {assessment_status, fit, feasibility, quality, decision}}`, covering: all met and achievable → `yes`; one `partly_met` → `not_yet`; Critical on `feasibility` with label `achievable` → `not_achievable`/`no`; `cannot_tell` requirement → `cannot_judge`; empty requirements + feasibility `cannot_judge` → `cannot_judge` with `fit_vacuous` (Review Focus 1); partial coverage on a generated lens → `incomplete_coverage`.
+- [ ] **Step 1: Rewrite the fixture**: set `coverage` to `{"fit": "complete", "feasibility": "complete", "quality": "complete"}`; replace `verdict_cases` with `judgment_cases`, each `{name, request, expected: {assessment_status, fit, feasibility, quality, decision}}`, covering: all met and achievable → `yes`; one `partly_met` → `not_yet`; Critical on `feasibility` with label `achievable` → `not_achievable`/`no`; `cannot_tell` requirement → `cannot_judge`; empty requirements + feasibility `cannot_judge` → `cannot_judge` with `fit_vacuous` (Review Focus 1); partial coverage on a generated lens → `incomplete_coverage`.
 
 - [ ] **Step 2: Write failing tests** (replace the skipped verdict tests):
 
@@ -205,7 +205,7 @@ Update the `assessment()` helper to build `expected_model_roles`/`review_protoco
 - Delete: `skills/_shared/evaluation_audit.py`, `tests/test_evaluation_audit.py`, `tests/fixtures/evaluation_audit_cases.json`, `docs/evaluation-validation.md`, `docs/research/`, `docs/research-implementation-plan.md`, `docs/scholar-refs.md`, `skills/_shared/__pycache__/`
 - Modify: `README.md` and `skills/_shared/judgment-rubric.md` only to drop links to the deleted files (full rewrite comes in Task 6).
 
-- [ ] **Step 1: Delete the files** with `git rm -r` for tracked paths; add `__pycache__/` to `.gitignore` if absent.
+- [ ] **Step 1: Delete the files** with `git rm -r` for tracked paths (`.gitignore` already covers `__pycache__/` and `.worktrees/` from Task 0 step 0).
 - [ ] **Step 2: Run** `command grep -rn 'evaluation_audit\|evaluation-validation\|scholar-refs\|research-implementation' --include='*.md' --include='*.py' --include='*.json' .` Expected: no hits.
 - [ ] **Step 3: Run** `python3 -m pytest -q`. Expected: PASS.
 - [ ] **Step 4: Commit** `git commit -m "chore: remove business verdict validation protocol"`.
@@ -215,13 +215,14 @@ Update the `assessment()` helper to build `expected_model_roles`/`review_protoco
 ### Task 4: Ledger schema 3
 
 **Files:**
-- Modify: `skills/_shared/state.py:40-85` (constants), `:239-270` (`validate_working_fields`), `:305-310` (schema check), `:449-528` (`validate_result`), `:670-688` (`_fresh`), `:831-875` (delete `_legacy`), `:876-1081` (`execute`: `init` fields, `update` patch fields, remove `import-legacy`)
+- Modify: `skills/_shared/state.py:40-85` (constants), `:161-238` (`validate_findings`: axes ⊆ the ledger's active lens IDs, accept optional `requirement_id` and `lens`, drop `thesis_breaking` and `plausibly_resolvable`), `:239-270` (`validate_working_fields`), `:305-310` (schema check), `:449-528` (`validate_result`), `:670-688` (`_fresh`), `:831-875` (delete `_legacy`), `:876-1081` (`execute`: `init` fields, `update` patch fields, remove `import-legacy`)
 - Test: `tests/test_state.py`
 
 **Interfaces:**
 - Consumes: `policy.FIXED_LENSES`, `policy.LABELS`, `policy.LENS_ID`.
-- Produces: `SCHEMA_VERSION = 3`; `KINDS = {"judgment", "revision", "ranking", "review_copy"}`; `PATCH_FIELDS = {"brief", "rewritable", "lenses", "decisions", "questions", "findings", "entries"}`; `DECISIONS = set(policy.LABELS["decision"])`; `REQUEST_FIELDS["init"] = {"text", "brief", "rewritable", "lenses"}`; no `import-legacy`.
-- State shape: `brief` is `{}` or `{goal, requirements: [{id, text}], constraints, standard, provenance: {part: "user"|"elicited"|"derived"}, confirmation: {...}|null, example_hashes: [...]}`; `rewritable` is `null` or `{value: bool, decided_by: "default"|"flag"|"user"}`; `lenses` is a list of `{id, examine, evidence, out_of_scope, origin: "fixed"|"generated"|"user_edited"}`; `entries` is a list of `{slug, judgment_report_id}` (brief-level ledgers only; `[]` otherwise).
+- Produces: `SCHEMA_VERSION = 3`; `KINDS = {"judgment", "revision", "ranking", "review_copy"}`; `PATCH_FIELDS = {"brief", "rewritable", "lenses", "decisions", "questions", "findings", "entries"}`; `DECISIONS = set(policy.LABELS["decision"])`; `REQUEST_FIELDS["init"] = {"text", "brief", "rewritable", "lenses"}`; no `import-legacy`. Remove the `AXES` alias from `policy.py` in this task; `CORE_MODEL_ROLES` becomes `{"judgment": policy.FIXED_LENSES, "ranking": ()}` and the per-report required roles come from `result["lenses"]`.
+- State shape: `brief` is `{}` or `{goal, goal_provisional: bool, requirements: [{id, text, provenance: "user"|"elicited"|"derived", support: [...], contradicted_by: [...]}], hypotheses: [same shape as a requirement], constraints, standard, provenance: {goal|constraints|standard: "user"|"elicited"|"derived"|"not_stated"}, weakly_supported: bool, example_hashes: [{file, sha256, label: "good"|"bad"}], confirmation: null | {decision_id, brief_sha256, review_protocol: {roles: [...]}}}`. The `derive` role's model observation lives in `confirmation.review_protocol`. `rewritable` is `null` or `{value: bool, decided_by: "default"|"flag"|"user"}`; `lenses` is a list of `{id, examine, evidence, out_of_scope, origin: "fixed"|"generated"|"user_edited"}`; `entries` is a list of `{slug, snapshot_sha256, judgment_report_id}` (brief-level ledgers only; `[]` otherwise).
+- `init` with `project_dir` and neither `source` nor `text` must pass `validate_state` with `current_version: null` (needed for a brief-level ledger that holds no document); add `test_brief_level_ledger_has_no_document` to the tests below.
 - `validate_result`: a new `judgment` report requires `assessment_status`, `expected_model_roles`, `review_protocol.roles`, `decision` and `lenses`; required roles are every ID in `result["lenses"]` plus `verifier` when `policy.verifier_required(findings)`; any `decision` other than `cannot_judge` requires `assessment_status == "complete"`. A new `ranking` report requires `ranked`, `unranked`, `entries`, and when `pairwise` is non-empty, role `pairwise` in `review_protocol.roles`.
 - Schema-2 ledger: `status` and every other operation raise `StateError("this ledger was written by idea-autopsy-business (schema 2); it is not migrated. Use a different slug.")`.
 
@@ -265,17 +266,17 @@ def test_patch_fields_are_the_schema_three_set(self):
 - Produces: `route(request) -> {"action", "reason", "pass_flags", "loop_flags", "current_version"}`.
   Intents: `auto, brief, judge, revise, rank, status, reset, stop`.
   Flags: `--brief, --entries, --examples, --critique-only, --rewrite, --loop, --verify-claims, --accept-all, --accept-none, --slug, --status, --reset`.
-  State fields (a summary the router builds from the ledger, as today): `current_version` (int ≥ 1), `stage` ∈ `snapshot|brief|judgment|revision|ranking`, `has_document`, `has_brief`, `has_judgment`, `rewritable` (the ledger's `rewritable.value`, or null when undecided), `entry_count` (int ≥ 0), `pending_questions`, `decision` (null or decision label), `assessment_status`, `can_revise`. `pending_experiments` and `await_evidence` are gone: the spec has no experiment step, and a proposed test lives in the improvement record as prose.
+  State fields (a summary the router builds from the ledger, as today): `current_version` (int ≥ 1), `stage` ∈ `snapshot|brief|judgment|revision|ranking`, `has_document`, `has_brief`, `has_judgment`, `rewritable` (the ledger's `rewritable.value`, or null when undecided), `entry_slugs` (list of slugs; `entry_count` is its length), `pending_questions`, `decision` (null or decision label), `assessment_status`, `can_revise`. `pending_experiments` and `await_evidence` are gone: the spec has no experiment step, and a proposed test lives in the improvement record as prose.
   Input types: `document`, `brief`, `examples`, `judgment`.
   Actions: `ask_document, ask_input_roles, ask_rewritable, brief, judge, revise, rank, ask_user, version_limit, critique_complete, stop, status, archive_state`.
   Skill flag allowlist: `brief` → `--brief --examples`; `judge` → `--verify-claims --critique-only --rewrite`; `revise` → `--accept-all --accept-none`; `rank` → `--verify-claims`.
-- Rules, in order after the administrative branch: `--critique-only` with `--rewrite` → `PolicyError`; `entry_count > 1` with `--loop` → `PolicyError("--loop needs a single entry; rank mode never revises")`; no document → `ask_document`; no brief and intent not `brief` → `brief`; `entry_count > 1` → `rank`; `rewritable is None` and intent in (`auto`, `revise`) and no overriding flag → `ask_rewritable`; `pending_questions` → `ask_user`; stage `revision` and not `has_judgment` → `judge`; `has_judgment`: `incomplete_coverage` → `stop`; `insufficient_evidence` → `stop` with reason naming the gap; `rewritable.value is False` → `critique_complete`; decision in (`not_yet`, `no`) and (`loop` or intent `revise`) and `can_revise` → revise path (version ≥ 3 → `version_limit`); decision `yes` → `stop`; otherwise `judge`.
+- Rules, in order after the administrative branch: `--critique-only` with `--rewrite` → `PolicyError`; duplicate values in `entry_slugs` → `PolicyError("entry slugs must be unique; rename a.md or a.txt")`; `entry_count > 1` with any of `--loop`, `--rewrite`, `--critique-only` → `PolicyError("rank mode judges only; it never revises")`; `entry_count > thresholds["rank_max_entries"]` → `PolicyError` naming the cap (Task 10 adds the threshold; until then the cap is a module constant `RANK_MAX_ENTRIES = 12`); no document → `ask_document`; no brief and intent not `brief` → `brief`; `entry_count > 1` → `rank`; `rewritable is None` and intent in (`auto`, `revise`) and no overriding flag → `ask_rewritable`; `pending_questions` → `ask_user`; stage `revision` and not `has_judgment` → `judge`; `has_judgment`: `incomplete_coverage` → `stop`; `insufficient_evidence` → `stop` with reason naming the gap; `rewritable.value is False` → `critique_complete`; decision in (`not_yet`, `no`) and (`loop` or intent `revise`) and `can_revise` → revise path (version ≥ 3 → `version_limit`); decision `yes` → `stop`; otherwise `judge`.
 
 - [ ] **Step 1: Rewrite `route_cases`** in the fixture to cover every action above at least once, including Review Focus 3 (`--entries` with `entry_count: 1` → `judge`).
-- [ ] **Step 2: Write failing tests** (replace skipped route tests): `test_fixture_routes` (loops the fixture), `test_loop_with_several_entries_is_rejected`, `test_critique_only_and_rewrite_conflict`, `test_non_rewritable_judgment_ends_with_critique_complete`, `test_loop_flags_propagate_only_to_judge_and_revise`.
+- [ ] **Step 2: Write failing tests** (replace skipped route tests): `test_fixture_routes` (loops the fixture), `test_revision_flags_with_several_entries_are_rejected` (each of `--loop`, `--rewrite`, `--critique-only`), `test_duplicate_entry_slugs_are_rejected`, `test_entry_cap_is_enforced`, `test_critique_only_and_rewrite_conflict`, `test_non_rewritable_judgment_ends_with_critique_complete`, `test_loop_flags_propagate_only_to_judge_and_revise`, `test_brief_action_without_brief_skill_is_a_stop_until_task_12` (see Task 9 interim rule).
 - [ ] **Step 3: Run** `python3 -m pytest tests/test_policy.py -k route -q`. Expected: FAIL.
 - [ ] **Step 4: Implement** the new `route` and `flag_set`.
-- [ ] **Step 5: Run** `python3 -m pytest -q`. Expected: PASS, zero skips remaining in the suite.
+- [ ] **Step 5: Run** `python3 -m pytest -q`. Expected: PASS, zero skips remaining in the suite (the three example-reading tests were deleted in Task 1, not skipped).
 - [ ] **Step 6: Commit** `git commit -m "feat(policy): brief-driven routing with rank and critique-only paths"`.
 
 ---
@@ -306,7 +307,15 @@ def test_patch_fields_are_the_schema_three_set(self):
 - Delete: `agents/product-strategist.md`
 
 **Interfaces:**
-- `reviewer.md` frontmatter `tools: Read`. Body: reads `skills/_shared/contracts.md` and `judge-standard.md`; receives the brief, one lens definition, the entry snapshot path, and the prohibitions; returns canonical findings plus, for lens `fit`, one `requirement_record` per requirement ID; for lens `feasibility` and `quality`, the label; strengths as well as weaknesses; never sees other entries or the author.
+- `reviewer.md` frontmatter `tools: Read`. Body: reads `skills/_shared/contracts.md` and `judge-standard.md`; never sees the author or prior verdicts; returns results to the caller and writes nothing. It carries a role table, and the caller names the role in the dispatch:
+
+| Role | Receives | Returns |
+|---|---|---|
+| `lens` (any lens ID) | the brief, one lens definition, one entry snapshot | canonical findings; for `fit`, one `requirement_record` per requirement ID; for `feasibility` and `quality`, the label |
+| `derive` | the labelled example files, the user brief if any | a drafted brief in the Task 4 shape with `support` / `contradicted_by` per item |
+| `pairwise` | the brief and exactly two entries | the winner or null, the reason, sources |
+
+A `lens` reviewer never sees a second entry; only `pairwise` does.
 - `verifier.md` frontmatter `tools: Read`. Body: checks every Critical/High and decision-driving finding against entry and brief; returns `doc_support` per finding and an exclusion audit.
 - `fact-checker.md`: existing text with the mode table reduced to `claims`.
 
@@ -341,8 +350,8 @@ def test_patch_fields_are_the_schema_three_set(self):
 - Modify: `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json` (version `4.0.0`, description "Judge an entry against a brief you supply: fit, feasibility, quality and an agent-written revision.")
 
 **Interfaces:**
-- `judge` skill workflow: 1 resolve entry snapshot and brief via `state.py`; if `rewritable` is null, apply the spec's default rule (the text is the deliverable → rewritable; the text describes a deliverable that exists elsewhere → not), honour `--critique-only` / `--rewrite`, ask once when unsure, and store `{value, decided_by}`; 2 build the neutral brief package; 3 generate up to three lenses from the brief, run `policy.py lens_check`, store lenses via `state.py update` (reuse stored lenses when present); 4 capture `expected_model_roles` for every lens plus `verifier`, run model preflight per role, dispatch `agents/reviewer.md` per lens in parallel fresh contexts with prohibitions; 5 dispatch the verifier; optional `fact-checker` with `--verify-claims`; 6 `policy.py normalize` with `lenses`, then `policy.py judgment`; 7 save an immutable `judgment` report with `result.lenses`, `decision`, labels, findings, `requirement_results`, `review_protocol`; 8 output: brief summary, labels and decision, per-requirement table, supported findings with evidence, verification summary, the improvement record (every negative finding, consequence, smallest resolving change, blockers separately, ranked by consequence), and the next action (`revise` when rewritable, otherwise end).
-- Router: inputs and flags from Task 5; resolves state, builds the `route` request, executes the returned action, routes to `brief` (Task 12; until then, the router reads `--brief PATH` itself and stores it via `init`/`update` as `provenance: user`), `judge`, `revise`, `rank`; loop and resume rules carried over from the current router minus strategy and experiments; `archive_state` text unchanged.
+- `judge` skill workflow: 1 resolve entry snapshot and brief via `state.py`; if `rewritable` is null, apply the spec's default rule (the text is the deliverable → rewritable; the text describes a deliverable that exists elsewhere → not), honour `--critique-only` / `--rewrite`, ask once when unsure, and store `{value, decided_by}`; 2 build the neutral brief package; 3 generate up to three lenses from the brief, run `policy.py lens_check`, store lenses via `state.py update` (reuse stored lenses when present; if the user supplies an edited lens definition, run `lens_check` on it and store it with `origin: user_edited`, keeping the previous definition in ledger history); 4 capture `expected_model_roles` for every lens plus `verifier`, run model preflight per role, dispatch `agents/reviewer.md` per lens in parallel fresh contexts with prohibitions; 5 dispatch the verifier; optional `fact-checker` with `--verify-claims`; 6 `policy.py normalize` with `lenses`, then `policy.py judgment`; 7 save an immutable `judgment` report with `result.lenses`, `decision`, labels, findings, `requirement_results`, `review_protocol`; 8 output: brief summary, labels and decision, per-requirement table, supported findings with evidence, verification summary, the improvement record (every negative finding, consequence, smallest resolving change, blockers separately, ranked by consequence), and the next action (`revise` when rewritable, otherwise end).
+- Router: inputs and flags from Task 5; resolves state, builds the `route` request, executes the returned action, routes to `brief`, `judge`, `revise`, `rank`. Interim rule, released in 4.0.0 and removed in Task 12: when the action is `brief`, the router reads `--brief PATH` itself (four headings, `R1..Rn` IDs) and stores it via `init`/`update` with every part `provenance: user`; with no `--brief` it stops with the exact text "Supply the brief with --brief PATH. The interview and example-derived briefs arrive in 4.2.0." This is tested in Task 5 as a `route_cases` entry (`brief` action with no `--brief` flag → `stop`); loop and resume rules carried over from the current router minus strategy and experiments; `archive_state` text unchanged.
 
 - [ ] **Step 1: Write `skills/judge/SKILL.md`** (target ≤ 90 lines) and the router (target ≤ 70 lines). Delete the three old skill directories. Bump versions.
 - [ ] **Step 2: Verify frontmatter ceilings**: `python3 -c "import re,pathlib;[print(p, len(re.search(r'^description: (.*)$', p.read_text(), re.M).group(1))) for p in pathlib.Path('.').glob('*/*/SKILL.md')]"`. Expected: every value ≤ 1024.
@@ -357,10 +366,10 @@ def test_patch_fields_are_the_schema_three_set(self):
 ### Task 10: Ranking policy (`rank`)
 
 **Files:**
-- Modify: `skills/_shared/policy.py` (new operation), `tests/test_policy.py`, `tests/fixtures/workflow_cases.json` (`rank_cases`)
+- Modify: `skills/_shared/policy.py` (new operation), `skills/_shared/thresholds.json` (add `"rank_max_entries": 12`; `route` reads it in place of `RANK_MAX_ENTRIES`), `tests/test_policy.py`, `tests/fixtures/workflow_cases.json` (`rank_cases`)
 
 **Interfaces:**
-- Produces: `rank(request) -> {"ranked": [{"rank", "entry", "separated_by": step|null, "reason"}], "unranked": [{"entry", "reason"}], "ties": [[entries...]], "pairwise_needed": [[a, b], ...]}`. Request: `judgments` (list of `{entry, report_id, decision, fit, feasibility, quality, critical_count, high_count}`), optional `pairwise` (list of `{entries: [a, b], winner: a|b|null, reason, sources}`).
+- Produces: `rank(request) -> {"ranked": [{"rank", "entry", "separated_by": step|null, "reason"}], "unranked": [{"entry", "reason"}], "ties": [[entries...]], "pairwise_needed": [[a, b], ...]}`. Request: `judgments` (list of `{entry, report_id, decision, fit, feasibility, quality, critical_count, high_count}`), optional `pairwise` (list of `{entries: [a, b], winner: a|b|null, reason, sources}`). More than `rank_max_entries` judgments → `PolicyError`.
   Order: decision `yes` < `not_yet` < `no` (best first); `cannot_judge` → `unranked`; then fit, feasibility, quality by label order; then `critical_count`, then `high_count`; still tied → look up `pairwise`; a null winner or no record keeps them tied (`pairwise_needed` lists pairs with no record). Ranks are dense: tied entries share a rank. `separated_by` names the first step that split an entry from the one below it: `decision|fit|feasibility|quality|critical_count|high_count|pairwise`.
 
 - [ ] **Step 1: Add `rank_cases`** to the fixture: clear order; tie broken by pairwise; tie with null winner shares rank; all `cannot_judge` (Review Focus 4) → `ranked` empty and `pairwise_needed` empty.
@@ -381,7 +390,7 @@ def test_patch_fields_are_the_schema_three_set(self):
 
 **Interfaces:**
 - `revise`: today's iterate-to-v2 workflow with these substitutions: critique source is the latest `judgment` report; consequential categories `scope`, `approach`; the brief is never edited (a remedy that would need a brief change becomes a blocker in the change record); hand back to `judge`; the business remedy table replaced by three generic rows (unsupported claim in the entry, requirement partly met, constraint exceeded).
-- `rank`: 1 resolve the brief-level ledger (`init` with `project_dir`, slug from the brief file name or `--slug`); 2 generate lenses once from the brief, `lens_check`, store on the brief ledger; 3 for each entry, run the `judge` skill on its own slug with the stored brief and lenses, collecting `judgment_report_id`; 4 build the `rank` request from the reports, run `policy.py rank`; 5 for each pair in `pairwise_needed`, dispatch one fresh `reviewer.md` with role `pairwise`, the brief and only those two entries, record its model, rerun `rank` with the records; 6 save an immutable `ranking` report on the brief ledger with `ranked`, `unranked`, `ties`, `entries`, `review_protocol`; 7 output the table from the spec.
+- `rank`: 1 resolve the brief-level ledger (`init` with `project_dir`, slug from the brief file name or `--slug`); 2 generate lenses once from the brief, `lens_check`, store on the brief ledger; 3 for each entry, compare its current snapshot hash with `entries[].snapshot_sha256` on the brief ledger; reuse the stored `judgment_report_id` when unchanged, otherwise run the `judge` skill on its own slug with the stored brief and lenses and record the new hash and report ID (so a re-rank after one revision re-judges only that entry); 4 build the `rank` request from the reports, run `policy.py rank`; 5 for each pair in `pairwise_needed`, dispatch one fresh `reviewer.md` with role `pairwise`, the brief and only those two entries, record its model, rerun `rank` with the records; 6 save an immutable `ranking` report on the brief ledger with `ranked`, `unranked`, `ties`, `entries`, `review_protocol`; 7 output the table from the spec.
 
 - [ ] **Step 1: Write both skills** (`revise` ≤ 60 lines, `rank` ≤ 50 lines). Delete `iterate-to-v2`. Bump versions.
 - [ ] **Step 2: Verify frontmatter ceilings** (command from Task 9 Step 2).
@@ -395,13 +404,13 @@ def test_patch_fields_are_the_schema_three_set(self):
 **Files:**
 - Modify: `skills/_shared/policy.py` (new operation `brief_merge`), `tests/test_policy.py`
 - Create: `skills/brief/SKILL.md`
-- Modify: `commands/autopsy.md` (route `brief` action to the skill; remove the interim `--brief` handling from Task 9), version bump (minor)
+- Modify: `commands/autopsy.md` (route the `brief` action to the skill; delete the interim stop text and its `route_cases` entry from Task 9), version bump (minor)
 
 **Interfaces:**
-- `brief_merge(request) -> {"brief": {...}, "conflicts": [{"requirement_id", "user_text", "derived_text", "reason"}], "hypotheses": [...]}`. Request: `user_brief` (may be `{}`), `derived_brief` (same shape plus per-item `support: [example files]` and `contradicted_by: [example files]`), `example_count: {good: n, bad: n}`. Rules: every user requirement survives verbatim with its ID; a derived requirement with the same ID or a normalised-equal text as a user one is dropped (no duplicate); a derived requirement whose `support` covers every good example and whose `contradicted_by` is non-empty becomes a requirement with `provenance: derived`; otherwise it goes to `hypotheses`; with `good == 1 and bad == 1` all derived requirements are hypotheses and `brief.weakly_supported` is `true`; derived `goal` is used only when the user's is empty and is marked `provisional`; a derived constraint or standard never replaces a user one.
-- `brief` skill: 1 if `--brief` read the file, parse four headings (`Goal`, `Requirements`, `Constraints`, `Standard`), assign `R1..Rn` to requirements lacking IDs; 2 if `--examples`, hash every file under `good/` and `bad/`, dispatch `agents/reviewer.md` with role `derive` and the derivation instruction, run `brief_merge`; 3 if neither, interview: goal first, then requirements one at a time until each is checkable (restate vague ones), then constraints and standard with "none" allowed; 4 play back the full brief with provenance and citations, get confirmation (recorded as a consequential decision bound to the brief hash); 5 store via `state.py` (`init` with `brief` or `update` patch); 6 return to the router.
+- `brief_merge(request) -> {"brief": {...}, "conflicts": [{"requirement_id", "user_text", "derived_text", "reason"}], "hypotheses": [...]}`. Request: `user_brief` (may be `{}`), `derived_brief` (same shape plus per-item `support: [example files]` and `contradicted_by: [example files]`), `example_count: {good: n, bad: n}`. Rules: `example_count.good < 1 or example_count.bad < 1` → `PolicyError("examples need at least one good and one bad")`; every user requirement survives verbatim with its ID; a derived requirement with the same ID or a normalised-equal text as a user one is dropped (no duplicate); a derived requirement whose `support` covers every good example and whose `contradicted_by` is non-empty becomes a requirement with `provenance: derived`; otherwise it goes to `hypotheses`; with `good == 1 and bad == 1` all derived requirements are hypotheses and `brief.weakly_supported` is `true`; derived `goal` is used only when the user's is empty and is marked `provisional`; a derived constraint or standard never replaces a user one.
+- `brief` skill: 1 if `--brief` read the file, parse four headings (`Goal`, `Requirements`, `Constraints`, `Standard`), assign `R1..Rn` to requirements lacking IDs; a heading that is missing or empty is left for step 3 (partial file plus interview); 2 if `--examples`, hash every file under `good/` and `bad/` (refuse when either is empty, matching `brief_merge`), capture role `derive` in `expected_model_roles`, run the model preflight, dispatch `agents/reviewer.md` with role `derive` and the derivation instruction, record the observation under `brief.confirmation.review_protocol`, run `brief_merge`; 3 if neither, interview: goal first, then requirements one at a time until each is checkable (restate vague ones), then constraints and standard with "none" allowed; 4 play back the full brief with provenance and citations, get confirmation (recorded as a consequential decision bound to the brief hash); 5 store via `state.py` (`init` with `brief` or `update` patch); 6 return to the router.
 
-- [ ] **Step 1: Write failing tests**: `test_derived_cannot_remove_or_weaken_user_requirement` (Review Focus 5), `test_single_pair_of_examples_marks_everything_hypothesis`, `test_derived_requirement_needs_all_good_and_one_bad`, `test_derived_goal_only_fills_an_empty_one`.
+- [ ] **Step 1: Write failing tests**: `test_derived_cannot_remove_or_weaken_user_requirement` (Review Focus 5), `test_single_pair_of_examples_marks_everything_hypothesis`, `test_missing_good_or_bad_examples_is_an_error`, `test_derived_requirement_needs_all_good_and_one_bad`, `test_derived_goal_only_fills_an_empty_one`.
 - [ ] **Step 2: Run** `python3 -m pytest tests/test_policy.py -k brief -q`. Expected: FAIL.
 - [ ] **Step 3: Implement** `brief_merge`; register it.
 - [ ] **Step 4: Run** the tests. Expected: PASS.
