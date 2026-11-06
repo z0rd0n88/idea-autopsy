@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-28-generic-judge-design.md`
 
-**Review record:** `.claude/reviews/2026-10-29-generic-judge-plan-review.md` (reasoned review of the previous revision, verdict block). This revision answers every Critical and High finding and every open question; the "Decisions from the reasoned review" section below is the disposition list.
+**Review record:** `docs/superpowers/reviews/2026-10-29-generic-judge-plan-review.md` (reasoned review of the previous revision, verdict block). This revision answers every Critical and High finding and every open question; the "Decisions from the reasoned review" section below is the disposition list.
 
 ## Global Constraints
 
