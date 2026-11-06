@@ -287,47 +287,68 @@ def normalize(request):
     }
 
 
-def verdict(request):
+RECORD_STATUSES = ("met", "partly_met", "not_met", "cannot_tell")
+
+
+def decide(fit, feasibility):
+    if "cannot_judge" in (fit, feasibility):
+        return "cannot_judge"
+    if fit == "does_not_meet" or feasibility == "not_achievable":
+        return "no"
+    if fit == "partly_meets" or feasibility == "achievable_with_changes":
+        return "not_yet"
+    return "yes"
+
+
+def judgment(request):
+    lenses = list(sequence(request.get("lenses"), "lenses"))
+    require(
+        set(FIXED_LENSES) <= set(lenses) and len(set(lenses)) == len(lenses),
+        "lenses must include fit, feasibility and quality exactly once",
+    )
+    for lens in lenses:
+        require(isinstance(lens, str) and LENS_ID.match(lens), f"invalid lens id {lens}")
+    requirement_ids = list(sequence(request.get("requirement_ids"), "requirement_ids"))
+    for requirement_id in requirement_ids:
+        nonempty(requirement_id, "requirement id")
+    require(len(set(requirement_ids)) == len(requirement_ids), "duplicate requirement id")
     normalized = normalize(
         {
             "findings": request.get("findings"),
             "severity_resolutions": request.get("severity_resolutions", {}),
+            "lenses": lenses,
+            "requirement_ids": requirement_ids,
         }
     )
     coverage = obj(request.get("coverage"), "coverage")
-    require(set(coverage) == set(AXES), "coverage must include exactly all four axes")
+    require(set(coverage) == set(lenses), "coverage must name exactly the active lenses")
     require(
-        all(
-            v in ("complete", "partial", "not_run", "failed") for v in coverage.values()
-        ),
+        all(v in ("complete", "partial", "not_run", "failed") for v in coverage.values()),
         "invalid coverage status",
     )
-    review_protocol = request.get("review_protocol")
-    required_roles = set(AXES)
-    if verifier_required(normalized["findings"]):
-        required_roles.add("verifier")
-    model_coverage = review_model_coverage(
-        request.get("expected_model_roles"),
-        review_protocol,
-        required_roles=required_roles,
+    records = sequence(request.get("requirement_records"), "requirement_records")
+    for record in records:
+        obj(record, "requirement record")
+        nonempty(record.get("requirement_id"), "requirement record.requirement_id")
+        require(record.get("status") in RECORD_STATUSES, "invalid requirement record status")
+        nonempty(record.get("evidence_location"), "requirement record.evidence_location")
+        for item in sequence(record.get("finding_ids"), "requirement record.finding_ids"):
+            nonempty(item, "requirement record finding id")
+    record_ids = [record["requirement_id"] for record in records]
+    require(
+        len(set(record_ids)) == len(record_ids) and set(record_ids) == set(requirement_ids),
+        "requirement_records must cover each brief requirement exactly once",
     )
-    model_gaps = model_coverage["model_policy_gaps"]
-    review_role_gaps = model_coverage["review_role_gaps"]
-    evidence = obj(request.get("decision_evidence", {}), "decision_evidence")
-    sufficient = boolean(
-        evidence.get("sufficient", False), "decision_evidence.sufficient"
-    )
-    if sufficient:
-        nonempty(evidence.get("rationale"), "decision_evidence.rationale")
-        require(
-            bool(sources(evidence.get("sources"))),
-            "sufficient decision evidence needs sources",
-        )
-    assets = sequence(request.get("reusable_assets", []), "reusable_assets")
-    for asset in assets:
-        obj(asset, "asset")
-        nonempty(asset.get("description"), "asset.description")
-        require(bool(sources(asset.get("sources"))), "reusable asset needs sources")
+    feasibility_label = request.get("feasibility_label")
+    require(feasibility_label in LABELS["feasibility"], "invalid feasibility_label")
+    quality_label = request.get("quality_label")
+    require(quality_label in LABELS["quality"], "invalid quality_label")
+    brief = obj(request.get("brief"), "brief")
+    nonempty(brief.get("sha256"), "brief.sha256")
+    boolean(brief.get("constraints_stated"), "brief.constraints_stated")
+    boolean(brief.get("standard_stated"), "brief.standard_stated")
+    nonempty(request.get("lens_set_sha256"), "lens_set_sha256")
+
     findings = normalized["findings"]
     active = [f for f in findings if not excluded(f)]
     decisive = [f for f in active if f["affects_decision"]]
@@ -336,30 +357,28 @@ def verdict(request):
         for f in decisive
         if f["kind"] in ("missing_evidence", "question") or not established(f)
     ]
-    criticals = [
+    solid = [
         f
         for f in decisive
-        if f["severity"] == "Critical"
-        and established(f)
-        and f["kind"] not in ("missing_evidence", "question")
+        if established(f) and f["kind"] not in ("missing_evidence", "question")
     ]
-    highs = [
-        f
-        for f in decisive
-        if f["severity"] == "High"
-        and established(f)
-        and f["kind"] not in ("missing_evidence", "question")
-    ]
+    criticals = [f for f in solid if f["severity"] == "Critical"]
+    highs = [f for f in solid if f["severity"] == "High"]
+    cited_ok = {
+        m
+        for f in active
+        if established(f) and f["kind"] not in ("missing_evidence", "question")
+        for m in f["member_ids"]
+    }
+
     assumption_issues = {}
-    for finding in criticals:
-        for assumption_id in finding["assumption_ids"]:
-            assumption_issues.setdefault(assumption_id, []).append(finding["issue_id"])
+    for f in criticals:
+        for assumption_id in f["assumption_ids"]:
+            assumption_issues.setdefault(assumption_id, []).append(f["issue_id"])
     shared_assumptions = {
         key: issues for key, issues in assumption_issues.items() if len(issues) > 1
     }
-    independence = obj(
-        request.get("independence_evidence", {}), "independence_evidence"
-    )
+    independence = obj(request.get("independence_evidence", {}), "independence_evidence")
     require(
         set(independence) <= set(shared_assumptions),
         "independence evidence names an unknown shared assumption",
@@ -367,9 +386,7 @@ def verdict(request):
     for assumption_id, explanation in independence.items():
         obj(explanation, "independence explanation")
         nonempty(explanation.get("reason"), "independence explanation.reason")
-        cited_ids = sequence(
-            explanation.get("issue_ids"), "independence explanation.issue_ids"
-        )
+        cited_ids = sequence(explanation.get("issue_ids"), "independence explanation.issue_ids")
         require(
             all(isinstance(item, str) for item in cited_ids)
             and sorted(cited_ids) == sorted(shared_assumptions[assumption_id]),
@@ -380,14 +397,100 @@ def verdict(request):
             "independent failure mechanisms require cited evidence",
         )
     unresolved_dependence = sorted(set(shared_assumptions) - set(independence))
+
+    reasons = []
+    requirement_results = {}
+    for record in records:
+        requirement_id = record["requirement_id"]
+        status = record["status"]
+        if status in ("not_met", "partly_met") and not set(record["finding_ids"]) & cited_ok:
+            status = "cannot_tell"
+            reasons.append(
+                f"{requirement_id}: a {record['status']} record cites no established finding, so it counts as cannot_tell."
+            )
+        forced_by = sorted(
+            f["id"] for f in criticals if f.get("requirement_id") == requirement_id
+        )
+        if forced_by:
+            status = "not_met"
+        requirement_results[requirement_id] = {
+            "status": status,
+            "evidence_location": record["evidence_location"],
+            "forced_by": forced_by,
+            "cited": list(record["finding_ids"]),
+        }
+    statuses = {r["status"] for r in requirement_results.values()}
+    fit_vacuous = not requirement_ids
+    if fit_vacuous:
+        fit = "meets"
+        reasons.append("The brief states no requirements, so fit is vacuous.")
+    elif "not_met" in statuses:
+        fit = "does_not_meet"
+    elif "cannot_tell" in statuses:
+        fit = "cannot_judge"
+    elif "partly_met" in statuses:
+        fit = "partly_meets"
+    else:
+        fit = "meets"
+
+    feasibility = feasibility_label
+    if any("feasibility" in f["axes"] for f in criticals):
+        feasibility = "not_achievable"
+    elif feasibility == "achievable" and any("feasibility" in f["axes"] for f in highs):
+        feasibility = "achievable_with_changes"
+    quality = quality_label
+    decision = decide(fit, feasibility)
+
+    required_roles = set(lenses)
+    if decision != "cannot_judge" or verifier_required(findings):
+        required_roles.add("verifier")
+    review_protocol = request.get("review_protocol")
+    model_coverage = review_model_coverage(
+        request.get("expected_model_roles"), review_protocol, required_roles=required_roles
+    )
+    model_gaps = model_coverage["model_policy_gaps"]
+    review_role_gaps = model_coverage["review_role_gaps"]
+
+    status = "complete"
+    if model_gaps or review_role_gaps:
+        status = "incomplete_coverage"
+        if model_gaps:
+            reasons.append("Mandatory model policy was not confirmed for: " + ", ".join(model_gaps))
+        if review_role_gaps:
+            reasons.append(
+                "Expected review roles were not observed with their declared policies: "
+                + ", ".join(review_role_gaps)
+            )
+    elif any(value != "complete" for value in coverage.values()):
+        status = "incomplete_coverage"
+        reasons.append("Every active lens must complete before a judgment.")
+    elif normalized["conflicts"] or gaps:
+        status = "insufficient_evidence"
+        reasons.append("Resolve conflicting findings or decision-relevant evidence gaps.")
+    elif unresolved_dependence:
+        status = "insufficient_evidence"
+        reasons.append(
+            "Critical findings share a causal assumption. Consolidate the underlying issue or document independent evidence."
+        )
+    if status != "complete":
+        fit = feasibility = quality = decision = "cannot_judge"
+
+    mechanical = {"fit": fit, "feasibility": feasibility, "quality": quality, "decision": decision}
     result = {
-        "schema_version": 2,
-        "assessment_status": "complete",
-        "mechanical_verdict": None,
-        "verdict": None,
-        "reasons": [],
+        "schema_version": 3,
+        "assessment_status": status,
+        "fit": fit,
+        "fit_vacuous": fit_vacuous,
+        "feasibility": feasibility,
+        "feasibility_provisional": not brief["constraints_stated"],
+        "quality": quality,
+        "quality_provisional": not brief["standard_stated"],
+        "decision": decision,
+        "mechanical": deepcopy(mechanical),
+        "reasons": reasons,
+        "requirement_results": requirement_results,
         "critical_issue_ids": [f["issue_id"] for f in criticals],
-        "blocking_high_issue_ids": [f["issue_id"] for f in highs],
+        "high_issue_ids": [f["issue_id"] for f in highs],
         "evidence_gaps": gaps,
         "excluded_ids": [m for f in findings if excluded(f) for m in f["member_ids"]],
         "conflicts": normalized["conflicts"],
@@ -399,124 +502,45 @@ def verdict(request):
         "model_policy_gaps": model_gaps,
         "review_role_gaps": review_role_gaps,
         "findings": deepcopy(findings),
+        "lenses": lenses,
+        "brief_sha256": brief["sha256"],
+        "lens_set_sha256": request["lens_set_sha256"],
         "expected_model_roles": deepcopy(request.get("expected_model_roles") or []),
     }
     if review_protocol is not None:
         result["review_protocol"] = deepcopy(review_protocol)
-    if model_gaps or review_role_gaps:
-        reasons = []
-        if model_gaps:
-            reasons.append(
-                "Mandatory model policy was not confirmed for: " + ", ".join(model_gaps)
-            )
-        if review_role_gaps:
-            reasons.append(
-                "Expected review roles were not observed with their declared policies: "
-                + ", ".join(review_role_gaps)
-            )
-        result.update(
-            assessment_status="incomplete_coverage",
-            reasons=reasons,
-        )
-    elif any(value != "complete" for value in coverage.values()):
-        result.update(
-            assessment_status="incomplete_coverage",
-            reasons=[
-                "All four current review axes must complete before a business verdict."
-            ],
-        )
-    elif normalized["conflicts"] or gaps:
-        result.update(
-            assessment_status="insufficient_evidence",
-            reasons=[
-                "Resolve conflicting findings or decision-relevant evidence gaps."
-            ],
-        )
-    elif unresolved_dependence:
-        result.update(
-            assessment_status="insufficient_evidence",
-            reasons=[
-                "Critical findings share a causal assumption. Consolidate the underlying issue or document independent evidence before counting separate blockers."
-            ],
-        )
-    elif any(f["plausibly_resolvable"] is None for f in criticals):
-        result.update(
-            assessment_status="insufficient_evidence",
-            reasons=[
-                "Classify each Critical's resolvability against current resources."
-            ],
-        )
-    elif len(criticals) >= 2:
-        result.update(
-            mechanical_verdict="Skip",
-            reasons=["Multiple independent established Critical issues remain."],
-        )
-    elif len(criticals) == 1:
-        critical = criticals[0]
-        feasibility_clean = not any(
-            "feasibility" in f["axes"] and f["severity"] in ("Critical", "High")
-            for f in active
-        )
-        if critical["thesis_breaking"] and assets and feasibility_clean:
-            result.update(
-                mechanical_verdict="Pivot",
-                reasons=[
-                    "One established thesis-breaking issue; documented reusable assets and complete clean feasibility."
-                ],
-            )
-        elif not critical["thesis_breaking"] and critical["plausibly_resolvable"]:
-            result.update(
-                mechanical_verdict="Proceed with caution",
-                reasons=[
-                    "One established non-thesis Critical is plausibly resolvable."
-                ],
-            )
-        else:
-            result.update(
-                mechanical_verdict="Skip",
-                reasons=[
-                    "The established Critical has no supported continuation or asset-backed pivot under current constraints."
-                ],
-            )
-    elif highs:
-        result.update(
-            mechanical_verdict="Proceed with caution",
-            reasons=["Established blocking High findings remain."],
-        )
-    elif sufficient:
-        result.update(
-            mechanical_verdict="Invest",
-            reasons=[
-                "No established blocking issue remains and decision evidence is explicitly sufficient."
-            ],
-        )
-    else:
-        result.update(
-            assessment_status="insufficient_evidence",
-            reasons=["An empty issue list is not sufficient evidence to invest."],
-        )
-    result["verdict"] = result["mechanical_verdict"]
     result["user_report_dependencies"] = [
         f["issue_id"] for f in decisive if f["evidence_basis"] == "user_report"
     ]
     if result["user_report_dependencies"]:
-        result["reasons"].append(
-            "Assessment is conditional on the cited user reports; these were not independently verified."
+        reasons.append(
+            "Judgment is conditional on the cited user reports; these were not independently verified."
         )
     if "override" in request:
         override = obj(request["override"], "override")
         require(
-            result["assessment_status"] == "complete",
+            status == "complete" and "cannot_judge" not in mechanical.values(),
             "override cannot bypass evidence or coverage gates",
         )
-        require(override.get("verdict") in VERDICTS, "invalid override verdict")
+        labels = obj(override.get("labels"), "override.labels")
         require(
-            override["verdict"] != "Invest" or sufficient,
-            "An Invest override requires explicit sufficient decision evidence with rationale and sources",
+            bool(labels) and set(labels) <= {"fit", "feasibility", "quality"},
+            "override.labels names fit, feasibility or quality",
         )
+        for key, value in labels.items():
+            require(value in LABELS[key], f"invalid override label for {key}")
+            require(value != "cannot_judge", "override cannot set a label to cannot_judge")
         nonempty(override.get("reason"), "override.reason")
         require(bool(sources(override.get("sources"))), "override needs evidence")
-        result.update(verdict=override["verdict"], override=deepcopy(override))
+        improves = any(
+            LABELS[key].index(value) < LABELS[key].index(mechanical[key])
+            for key, value in labels.items()
+        )
+        if improves:
+            nonempty(override.get("decision_id"), "override.decision_id")
+        result.update(labels)
+        result["decision"] = decide(result["fit"], result["feasibility"])
+        result["override"] = deepcopy(override)
     return result
 
 
@@ -1258,7 +1282,7 @@ OPERATIONS = {
     name: globals()[name]
     for name in (
         "normalize",
-        "verdict",
+        "judgment",
         "acceptance",
         "change_id",
         "gate",

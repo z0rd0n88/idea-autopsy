@@ -294,95 +294,186 @@ class ModelDispatchTests(unittest.TestCase):
         self.assertEqual("unknown", observed["actual_model"])
 
 
-@unittest.skip("rewritten in Task 2")
-class VerdictTests(unittest.TestCase):
-    def test_decision_driving_finding_requires_a_planned_verifier(self):
-        for changes in (
-            {"severity": "High"},
-            {"severity": "Medium", "affects_decision": True},
+SOURCES = [
+    {
+        "type": "document",
+        "ref": "fixture.md:L2",
+        "quote": "The prototype fits the stated allocation.",
+    }
+]
+
+
+def without_role(request, role):
+    request["expected_model_roles"] = [
+        item for item in request["expected_model_roles"] if item["role"] != role
+    ]
+    request["review_protocol"]["roles"] = [
+        item for item in request["review_protocol"]["roles"] if item["role"] != role
+    ]
+    return request
+
+
+def role_index(request, role):
+    return [item["role"] for item in request["expected_model_roles"]].index(role)
+
+
+class JudgmentTests(unittest.TestCase):
+    def test_fixture_judgment_table(self):
+        for case in FIXTURE["judgment_cases"]:
+            with self.subTest(case=case["name"]):
+                request = assessment(
+                    [finding(**f) for f in case["findings"]], **deepcopy(case["request"])
+                )
+                result = policy.execute("judgment", request)
+                for key, value in case["expected"].items():
+                    self.assertEqual(value, result[key], key)
+
+    def test_requirement_records_must_cover_the_brief_exactly(self):
+        for records in (
+            [],
+            [rec("R1")],
+            [rec("R1"), rec("R1"), rec("R2")],
+            [rec("R1"), rec("R3")],
         ):
-            with self.subTest(changes=changes):
-                request = assessment([finding(**changes)])
-                request["expected_model_roles"] = [
-                    item
-                    for item in request["expected_model_roles"]
-                    if item["role"] != "verifier"
-                ]
-                request["review_protocol"]["roles"] = [
-                    item
-                    for item in request["review_protocol"]["roles"]
-                    if item["role"] != "verifier"
-                ]
-                result = policy.execute("verdict", request)
-                self.assertEqual("incomplete_coverage", result["assessment_status"])
-                self.assertIsNone(result["verdict"])
-                self.assertIn("verifier", result["review_role_gaps"])
-        no_verifier_needed = policy.execute(
-            "verdict",
-            assessment([finding(severity="Medium", affects_decision=False)]),
+            with self.subTest(records=records), self.assertRaisesRegex(
+                policy.PolicyError, "requirement_records must cover"
+            ):
+                policy.execute(
+                    "judgment",
+                    assessment(requirement_ids=["R1", "R2"], requirement_records=records),
+                )
+
+    def test_critical_with_requirement_id_forces_not_met(self):
+        f = finding()
+        result = policy.execute(
+            "judgment", assessment([f], requirement_records=[rec("R1", "met")])
         )
-        self.assertEqual("complete", no_verifier_needed["assessment_status"])
-        self.assertNotIn("verifier", no_verifier_needed["review_role_gaps"])
+        self.assertEqual("not_met", result["requirement_results"]["R1"]["status"])
+        self.assertEqual([f["id"]], result["requirement_results"]["R1"]["forced_by"])
+        self.assertEqual("does_not_meet", result["fit"])
+        self.assertEqual("no", result["decision"])
 
-    def test_missing_mandatory_role_cannot_complete_a_verdict(self):
-        expected = [
-            {
-                "role": axis,
-                "caller_policy": (
-                    {"model": "claude-opus-5-5", "mandatory": True}
-                    if axis == "risk"
-                    else None
-                ),
-            }
-            for axis in policy.AXES
-        ]
-        observed = [
-            policy.execute(
-                "model_observation",
-                {
-                    "preflight": policy.execute(
-                        "model_preflight", {"role": axis, "dispatch_path": "inline"}
-                    ),
-                    "actual_model": "unknown",
-                },
-            )
-            for axis in policy.AXES
-            if axis != "risk"
-        ]
-        for protocol in (
-            None,
-            {"roles": observed},
-            assessment()["review_protocol"],
-        ):
-            with self.subTest(protocol=protocol):
-                request = assessment(expected_model_roles=expected)
-                if protocol is None:
-                    del request["review_protocol"]
-                else:
-                    request["review_protocol"] = protocol
-                result = policy.execute("verdict", request)
+    def test_negative_record_without_established_finding_is_cannot_tell(self):
+        result = policy.execute(
+            "judgment",
+            assessment(requirement_records=[rec("R1", "not_met", finding_ids=[])]),
+        )
+        self.assertEqual("cannot_tell", result["requirement_results"]["R1"]["status"])
+        self.assertEqual("cannot_judge", result["fit"])
+
+    def test_high_on_feasibility_raises_floor_but_never_lowers(self):
+        high = finding(severity="High", axes=["feasibility"], lens="feasibility")
+        raised = policy.execute("judgment", assessment([high]))
+        self.assertEqual("achievable_with_changes", raised["feasibility"])
+        self.assertEqual("not_yet", raised["decision"])
+        kept = policy.execute(
+            "judgment", assessment([high], feasibility_label="not_achievable")
+        )
+        self.assertEqual("not_achievable", kept["feasibility"])
+
+    def test_quality_never_moves_decision(self):
+        result = policy.execute("judgment", assessment(quality_label="weak"))
+        self.assertEqual("weak", result["quality"])
+        self.assertEqual("yes", result["decision"])
+
+    def test_override_rederives_decision_and_needs_user_decision_to_improve(self):
+        down = {
+            "labels": {"fit": "does_not_meet"},
+            "reason": "The chorus misses the brief's tempo rule.",
+            "sources": SOURCES,
+        }
+        result = policy.execute("judgment", assessment(override=down))
+        self.assertEqual("no", result["decision"])
+        self.assertEqual("yes", result["mechanical"]["decision"])
+        self.assertEqual(down, result["override"])
+        up = {"labels": {"fit": "meets"}, "reason": "Reviewer misread R1.", "sources": SOURCES}
+        with self.assertRaisesRegex(policy.PolicyError, "decision_id"):
+            policy.execute("judgment", assessment([finding()], override=up))
+        up["decision_id"] = "D-7"
+        lifted = policy.execute("judgment", assessment([finding()], override=up))
+        self.assertEqual("yes", lifted["decision"])
+        self.assertEqual("no", lifted["mechanical"]["decision"])
+        partial = assessment(override=down)
+        partial["coverage"]["quality"] = "failed"
+        with self.assertRaisesRegex(policy.PolicyError, "override cannot bypass"):
+            policy.execute("judgment", partial)
+        to_unknown = dict(down, labels={"fit": "cannot_judge"})
+        with self.assertRaisesRegex(policy.PolicyError, "override cannot set"):
+            policy.execute("judgment", assessment(override=to_unknown))
+
+    def test_coverage_must_match_active_lenses(self):
+        request = assessment(lenses=["fit", "feasibility", "quality", "mix"])
+        del request["coverage"]["mix"]
+        with self.assertRaisesRegex(policy.PolicyError, "coverage must name exactly"):
+            policy.execute("judgment", request)
+
+    def test_provisional_flags_follow_the_brief(self):
+        result = policy.execute(
+            "judgment",
+            assessment(
+                brief={"sha256": "0" * 64, "constraints_stated": False, "standard_stated": False}
+            ),
+        )
+        self.assertTrue(result["feasibility_provisional"])
+        self.assertTrue(result["quality_provisional"])
+        stated = policy.execute("judgment", assessment())
+        self.assertFalse(stated["feasibility_provisional"])
+        self.assertFalse(stated["quality_provisional"])
+
+    def test_verifier_required_for_any_decision(self):
+        for findings, decision in (([], "yes"), ([finding()], "no")):
+            with self.subTest(decision=decision):
+                result = policy.execute(
+                    "judgment", without_role(assessment(findings), "verifier")
+                )
                 self.assertEqual("incomplete_coverage", result["assessment_status"])
-                self.assertIsNone(result["verdict"])
-                self.assertIn("risk", result["model_policy_gaps"])
+                self.assertEqual("cannot_judge", result["decision"])
+                self.assertIn("verifier", result["review_role_gaps"])
+        vacuous = assessment(
+            requirement_ids=[], requirement_records=[], feasibility_label="cannot_judge"
+        )
+        result = policy.execute("judgment", without_role(vacuous, "verifier"))
+        self.assertEqual("complete", result["assessment_status"])
 
-    def test_complete_verdict_requires_a_predispatch_role_plan(self):
+    def test_missing_mandatory_role_cannot_complete_a_judgment(self):
+        request = assessment()
+        mandatory = {"model": "claude-opus-5-5", "mandatory": True}
+        request["expected_model_roles"][role_index(request, "quality")]["caller_policy"] = mandatory
+        for protocol in (None, "drop_quality", "keep"):
+            with self.subTest(protocol=protocol):
+                attempt = deepcopy(request)
+                if protocol is None:
+                    del attempt["review_protocol"]
+                elif protocol == "drop_quality":
+                    attempt["review_protocol"]["roles"] = [
+                        r for r in attempt["review_protocol"]["roles"] if r["role"] != "quality"
+                    ]
+                result = policy.execute("judgment", attempt)
+                self.assertEqual("incomplete_coverage", result["assessment_status"])
+                self.assertEqual("cannot_judge", result["decision"])
+                self.assertIn("quality", result["model_policy_gaps"])
+
+    def test_complete_judgment_requires_a_predispatch_role_plan(self):
         request = assessment()
         del request["expected_model_roles"]
-        result = policy.execute("verdict", request)
+        result = policy.execute("judgment", request)
         self.assertEqual("incomplete_coverage", result["assessment_status"])
-        self.assertIsNone(result["verdict"])
-        self.assertEqual(sorted(policy.AXES), result["review_role_gaps"])
+        self.assertEqual("cannot_judge", result["decision"])
+        self.assertEqual(
+            sorted(list(policy.FIXED_LENSES) + ["verifier"]), result["review_role_gaps"]
+        )
 
     def test_blocked_reviewer_cannot_count_as_complete_coverage(self):
         request = assessment()
-        request["expected_model_roles"][policy.AXES.index("risk")]["caller_policy"] = {
+        index = role_index(request, "quality")
+        request["expected_model_roles"][index]["caller_policy"] = {
             "model": "opus",
             "mandatory": False,
         }
         prepared = policy.execute(
             "model_preflight",
             {
-                "role": "risk",
+                "role": "quality",
                 "dispatch_path": "registered",
                 "caller_policy": {"model": "opus", "mandatory": False},
                 "agent_model_pin": "sonnet",
@@ -392,22 +483,22 @@ class VerdictTests(unittest.TestCase):
             },
         )
         self.assertFalse(prepared["dispatch_allowed"])
-        request["review_protocol"]["roles"][policy.AXES.index("risk")] = policy.execute(
-            "model_observation",
-            {"preflight": prepared, "actual_model": "unknown"},
+        request["review_protocol"]["roles"][index] = policy.execute(
+            "model_observation", {"preflight": prepared, "actual_model": "unknown"}
         )
-        result = policy.execute("verdict", request)
+        result = policy.execute("judgment", request)
         self.assertEqual("incomplete_coverage", result["assessment_status"])
-        self.assertIsNone(result["verdict"])
-        self.assertIn("risk", result["review_role_gaps"])
+        self.assertEqual("cannot_judge", result["decision"])
+        self.assertIn("quality", result["review_role_gaps"])
 
     def test_mandatory_model_gap_uses_incomplete_coverage_path(self):
+        mandatory = {"model": "claude-opus-5-5", "mandatory": True}
         prepared = policy.execute(
             "model_preflight",
             {
-                "role": "risk",
+                "role": "quality",
                 "dispatch_path": "inline",
-                "caller_policy": {"model": "claude-opus-5-5", "mandatory": True},
+                "caller_policy": mandatory,
                 "host_can_select": True,
                 "host_can_reveal": True,
             },
@@ -416,24 +507,20 @@ class VerdictTests(unittest.TestCase):
             "model_observation", {"preflight": prepared, "actual_model": "unknown"}
         )
         request = assessment()
-        request["expected_model_roles"][policy.AXES.index("risk")]["caller_policy"] = {
-            "model": "claude-opus-5-5",
-            "mandatory": True,
-        }
-        request["review_protocol"]["roles"][policy.AXES.index("risk")] = role
-        result = policy.execute("verdict", request)
+        index = role_index(request, "quality")
+        request["expected_model_roles"][index]["caller_policy"] = mandatory
+        request["review_protocol"]["roles"][index] = role
+        result = policy.execute("judgment", request)
         self.assertEqual("incomplete_coverage", result["assessment_status"])
-        self.assertIsNone(result["verdict"])
-        self.assertEqual(["risk"], result["model_policy_gaps"])
-        self.assertEqual(
-            role, result["review_protocol"]["roles"][policy.AXES.index("risk")]
-        )
+        self.assertEqual("cannot_judge", result["decision"])
+        self.assertEqual(["quality"], result["model_policy_gaps"])
+        self.assertEqual(role, result["review_protocol"]["roles"][index])
 
-    def test_confirmed_mandatory_alias_can_complete_a_verdict(self):
+    def test_confirmed_mandatory_alias_can_complete_a_judgment(self):
         prepared = policy.execute(
             "model_preflight",
             {
-                "role": "risk",
+                "role": "quality",
                 "dispatch_path": "inline",
                 "caller_policy": {"model": "opus", "mandatory": True},
                 "host_can_select": True,
@@ -449,65 +536,50 @@ class VerdictTests(unittest.TestCase):
             },
         )
         request = assessment()
-        request["expected_model_roles"][policy.AXES.index("risk")]["caller_policy"] = {
+        index = role_index(request, "quality")
+        request["expected_model_roles"][index]["caller_policy"] = {
             "model": "opus",
             "mandatory": True,
         }
-        request["review_protocol"]["roles"][policy.AXES.index("risk")] = role
-        result = policy.execute("verdict", request)
+        request["review_protocol"]["roles"][index] = role
+        result = policy.execute("judgment", request)
         self.assertEqual("complete", result["assessment_status"])
-        self.assertEqual("Invest", result["verdict"])
+        self.assertEqual("yes", result["decision"])
         self.assertEqual([], result["model_policy_gaps"])
 
     def test_no_model_requirement_does_not_create_a_coverage_gap(self):
         prepared = policy.execute(
-            "model_preflight", {"role": "risk", "dispatch_path": "inline"}
+            "model_preflight", {"role": "quality", "dispatch_path": "inline"}
         )
         role = policy.execute(
             "model_observation", {"preflight": prepared, "actual_model": "unknown"}
         )
         request = assessment()
-        request["review_protocol"]["roles"][policy.AXES.index("risk")] = role
-        result = policy.execute("verdict", request)
+        request["review_protocol"]["roles"][role_index(request, "quality")] = role
+        result = policy.execute("judgment", request)
         self.assertEqual("complete", result["assessment_status"])
-        self.assertEqual("Invest", result["verdict"])
+        self.assertEqual("yes", result["decision"])
         self.assertEqual([], result["model_policy_gaps"])
-
-    def test_shared_assumption_is_not_independent_corroboration(self):
-        result = policy.execute(
-            "verdict", assessment([finding(), finding(id="F-2", issue_id="I-2")])
-        )
-        self.assertEqual("insufficient_evidence", result["assessment_status"])
-        self.assertIsNone(result["verdict"])
-        self.assertEqual({"A-1": ["I-1", "I-2"]}, result["shared_critical_assumptions"])
 
     def test_independence_explanation_preserves_shared_assumption_ids(self):
         proof = {
             "A-1": {
                 "issue_ids": ["I-1", "I-2"],
                 "reason": "Separate causal mechanisms remain failing when the other is fixed; synthetic evidence.",
-                "sources": FIXTURE["evidence"]["sources"],
+                "sources": SOURCES,
             }
         }
+        pair = [finding(), finding(id="F-2", issue_id="I-2")]
         result = policy.execute(
-            "verdict",
-            assessment(
-                [finding(), finding(id="F-2", issue_id="I-2")],
-                independence_evidence=proof,
-            ),
+            "judgment", assessment(pair, independence_evidence=proof)
         )
-        self.assertEqual("Skip", result["verdict"])
+        self.assertEqual("complete", result["assessment_status"])
+        self.assertEqual("no", result["decision"])
         self.assertEqual(proof, result["independence_evidence"])
         self.assertEqual({"A-1": ["I-1", "I-2"]}, result["shared_critical_assumptions"])
         proof["A-1"]["issue_ids"] = ["I-1"]
-        with self.assertRaises(policy.PolicyError):
-            policy.execute(
-                "verdict",
-                assessment(
-                    [finding(), finding(id="F-2", issue_id="I-2")],
-                    independence_evidence=proof,
-                ),
-            )
+        with self.assertRaisesRegex(policy.PolicyError, "exactly the affected issue ids"):
+            policy.execute("judgment", assessment(pair, independence_evidence=proof))
 
     def test_unsourced_independence_cannot_unlock_multiple_criticals(self):
         proof = {
@@ -517,80 +589,29 @@ class VerdictTests(unittest.TestCase):
                 "sources": [],
             }
         }
-        with self.assertRaises(policy.PolicyError):
+        with self.assertRaisesRegex(policy.PolicyError, "require cited evidence"):
             policy.execute(
-                "verdict",
+                "judgment",
                 assessment(
                     [finding(), finding(id="F-2", issue_id="I-2")],
                     independence_evidence=proof,
                 ),
             )
 
-    def test_fixture_decision_table(self):
-        for case in FIXTURE["verdict_cases"]:
-            with self.subTest(case=case["name"]):
-                request = assessment([finding(**f) for f in case["findings"]])
-                request["coverage"].update(case.get("coverage", {}))
-                request["decision_evidence"]["sufficient"] = case.get(
-                    "sufficient", True
-                )
-                if case.get("assets"):
-                    request["reusable_assets"] = [
-                        {
-                            "description": "Synthetic capability",
-                            "sources": deepcopy(FIXTURE["evidence"]["sources"]),
-                        }
-                    ]
-                output = policy.execute("verdict", request)
-                self.assertEqual(case["status"], output["assessment_status"])
-                self.assertEqual(case["verdict"], output["verdict"])
-                self.assertEqual(output["verdict"], output["mechanical_verdict"])
-
-    def test_override_separate_audit_without_streak_cap(self):
-        override = {
-            "verdict": "Proceed with caution",
-            "reason": "Reserve lowers confidence.",
-            "sources": deepcopy(FIXTURE["evidence"]["sources"]),
-        }
-        for _ in range(3):
-            output = policy.execute("verdict", assessment(override=override))
-            self.assertEqual("Invest", output["mechanical_verdict"])
-            self.assertEqual(override, output["override"])
-
-    def test_override_cannot_bypass_axis_or_invest_evidence(self):
-        override = {
-            "verdict": "Invest",
-            "reason": "Invalid shortcut.",
-            "sources": FIXTURE["evidence"]["sources"],
-        }
-        request = assessment(override=override)
-        request["coverage"]["feasibility"] = "failed"
-        with self.assertRaises(policy.PolicyError):
-            policy.execute("verdict", request)
-        with self.assertRaises(policy.PolicyError):
-            policy.execute(
-                "verdict",
-                assessment(
-                    [finding()],
-                    decision_evidence={"sufficient": False},
-                    override=override,
-                ),
-            )
-
     def test_claim_removal_cannot_close_risk(self):
-        with self.assertRaises(policy.PolicyError):
+        with self.assertRaisesRegex(policy.PolicyError, "cannot mark the finding resolved"):
             policy.execute(
-                "verdict",
+                "judgment",
                 assessment([finding(status="resolved", resolution="claim_removed")]),
             )
 
     def test_refutation_recomputes_without_approval(self):
-        before = policy.execute("verdict", assessment([finding()]))
+        before = policy.execute("judgment", assessment([finding()]))
         after = policy.execute(
-            "verdict", assessment([finding(status="refuted", doc_support="refuted")])
+            "judgment", assessment([finding(status="refuted", doc_support="refuted")])
         )
-        self.assertEqual("Proceed with caution", before["verdict"])
-        self.assertEqual("Invest", after["verdict"])
+        self.assertEqual("no", before["decision"])
+        self.assertEqual("yes", after["decision"])
         self.assertEqual(["F-1"], after["excluded_ids"])
 
     def test_sourced_user_report_is_conditional_not_external_verification(self):
@@ -601,12 +622,12 @@ class VerdictTests(unittest.TestCase):
                 {
                     "type": "user",
                     "ref": "reply:4",
-                    "quote": "My available budget is 100; costs are 160.",
+                    "quote": "The venue only allows four minutes; the track runs six.",
                 }
             ],
         )
-        output = policy.execute("verdict", assessment([f]))
-        self.assertEqual("Proceed with caution", output["verdict"])
+        output = policy.execute("judgment", assessment([f]))
+        self.assertEqual("no", output["decision"])
         self.assertEqual(["I-1"], output["user_report_dependencies"])
         self.assertTrue(
             any("not independently verified" in reason for reason in output["reasons"])
@@ -967,11 +988,10 @@ class PriorityAndCLITests(unittest.TestCase):
         self.assertEqual("", bad.stdout)
         self.assertIn("error", json.loads(bad.stderr))
 
-    @unittest.skip("rewritten in Task 2")
     def test_pure_operations_do_not_mutate_input(self):
         request = assessment([finding()])
         before = deepcopy(request)
-        policy.execute("verdict", request)
+        policy.execute("judgment", request)
         self.assertEqual(before, request)
 
 
