@@ -16,17 +16,23 @@ import sys
 from pathlib import Path
 
 
-AXES = ("critical_thinking", "feasibility", "risk", "roi")
-VERDICTS = ("Invest", "Proceed with caution", "Pivot", "Skip")
-CATEGORIES = (
-    "routine",
-    "target_customer",
-    "pricing",
-    "business_model",
-    "core_thesis",
-    "scope",
-    "experiment",
-)
+FIXED_LENSES = ("fit", "feasibility", "quality")
+AXES = FIXED_LENSES  # removed in Task 3 once state.py stops importing it
+RESERVED_PREFIXES = ("verifier", "derive", "tiebreak", "fact-checker")
+LENS_ID = re.compile(r"[a-z][a-z0-9-]{1,31}\Z")
+LABELS = {
+    "fit": ("meets", "partly_meets", "does_not_meet", "cannot_judge"),
+    "feasibility": (
+        "achievable",
+        "achievable_with_changes",
+        "not_achievable",
+        "cannot_judge",
+    ),
+    "quality": ("strong", "adequate", "weak", "cannot_judge"),
+    "decision": ("yes", "not_yet", "no", "cannot_judge"),
+}
+VERDICTS = ("Invest", "Proceed with caution", "Pivot", "Skip")  # route reads it until Task 4
+CATEGORIES = ("routine", "scope", "approach")
 ENUMS = {
     "kind": ("contradiction", "missing_evidence", "risk", "question"),
     "severity": ("Critical", "High", "Medium"),
@@ -99,25 +105,31 @@ def sources(value, label="sources"):
     return value
 
 
-def validate_finding(value):
+def validate_finding(value, lenses=FIXED_LENSES):
     """Validate a normalized finding; never upgrade a legacy provenance tag."""
     f = deepcopy(obj(value, "finding"))
+    for key in ("thesis_breaking", "plausibly_resolvable"):
+        require(key not in f, f"finding.{key} is no longer accepted")
     for key in ("id", "issue_id", "statement", "severity_reason"):
         nonempty(f.get(key), f"finding.{key}")
     for key, values in ENUMS.items():
         require(f.get(key) in values, f"finding.{key} must be one of {values}")
-    for key in ("affects_decision", "thesis_breaking"):
-        boolean(f.get(key), f"finding.{key}")
-    require(
-        f.get("plausibly_resolvable") is None
-        or type(f["plausibly_resolvable"]) is bool,
-        "finding.plausibly_resolvable must be boolean or null",
-    )
+    boolean(f.get("affects_decision"), "finding.affects_decision")
     for key in ("axes", "assumption_ids"):
         for item in sequence(f.get(key), f"finding.{key}"):
             nonempty(item, f"finding.{key} entry")
         require(len(set(f[key])) == len(f[key]), f"finding.{key} contains duplicates")
-    require(set(f["axes"]) <= set(AXES), "finding.axes contains an unknown axis")
+    require(set(f["axes"]) <= set(lenses), "finding.axes contains an unknown axis")
+    nonempty(f.get("lens"), "finding.lens")
+    require(f["lens"] in f["axes"], "finding.lens must be in axes")
+    if "origin_lenses" in f:
+        origin = sequence(f["origin_lenses"], "finding.origin_lenses")
+        require(
+            bool(origin) and origin == sorted(set(origin)) and set(origin) <= set(f["axes"]),
+            "finding.origin_lenses must be a sorted list of lenses in axes",
+        )
+    if "requirement_id" in f:
+        nonempty(f["requirement_id"], "finding.requirement_id")
     sources(f.get("sources"))
     if "member_ids" in f:
         for member in sequence(f["member_ids"], "finding.member_ids"):
@@ -171,177 +183,34 @@ def unique(items):
     return result
 
 
-def markdown_candidates(markdown):
-    """Import final synthesis only. Imported claims require source verification.
-
-    This is a conservative compatibility reader, not semantic interpretation.
-    JSON findings are the authoritative format for new reports.
-    """
-    nonempty(markdown, "markdown")
-    rows = []
-    fenced = False
-    for number, line in enumerate(markdown.splitlines(), 1):
-        if re.match(r"^\s*(```|~~~)", line):
-            fenced = not fenced
-            continue
-        if not fenced:
-            heading = re.match(r"^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$", line)
-            rows.append(
-                (
-                    number,
-                    line,
-                    (len(heading[1]), heading[2].lower()) if heading else None,
-                )
-            )
-    canonical = [
-        i
-        for i, (_, _, h) in enumerate(rows)
-        if h and h[1].startswith("normalized findings")
-    ]
-    synthesis = [i for i, (_, _, h) in enumerate(rows) if h and h[1] == "synthesis"]
-    table = [
-        i
-        for i, (_, _, h) in enumerate(rows)
-        if h and h[1].startswith("issue multiplicity table")
-    ]
-    anchors = canonical or synthesis or table
-    if anchors:
-        start = anchors[-1]
-        level = rows[start][2][0]
-        end = next(
-            (
-                i
-                for i in range(start + 1, len(rows))
-                if rows[i][2] and rows[i][2][0] <= level
-            ),
-            len(rows),
-        )
-        if synthesis and not canonical:
-            end = next(
-                (
-                    i
-                    for i in range(start + 1, len(rows))
-                    if rows[i][2]
-                    and rows[i][2][1].startswith(
-                        (
-                            "iteration recommendations",
-                            "next step",
-                            "verdict:",
-                            "reviewer ",
-                        )
-                    )
-                ),
-                len(rows),
-            )
-        selected = rows[start + 1 : end]
-        fmt = (
-            "normalized"
-            if canonical
-            else "stress-test-idea"
-            if synthesis
-            else "evaluate-proposal-harsh"
-        )
-    else:
-        selected, fmt = rows, "unknown"
-    result, bucket = (
-        [],
-        "verdict" if table and not canonical and not synthesis else "unknown",
-    )
-    for number, line, heading in selected:
-        if heading:
-            name = heading[1]
-            if name.startswith("consensus findings"):
-                bucket = "consensus"
-            elif name.startswith("unique"):
-                bucket = (
-                    "unique_reach"
-                    if "likely reach" in name
-                    else "unique_real"
-                    if "(real)" in name
-                    else "unique_unrated"
-                )
-            elif name.startswith(("what none caught", "what neither caught")):
-                bucket = "speculative"
-            else:
-                bucket = "unknown"
-            continue
-        if fmt == "stress-test-idea" and bucket == "unknown":
-            continue  # verification, contradictions and recommendations are not final finding rows
-        match = re.match(
-            r"^\s*[-*]\s+(?:\*\*)?\[(Critical|High|Medium)\](?:\*\*)?\s*(.*)",
-            line,
-            re.I,
-        )
-        if match:
-            severity, statement = match[1].title(), match[2].strip()
-        elif fmt == "evaluate-proposal-harsh" and line.strip().startswith("|"):
-            cells = [c.strip() for c in line.strip().strip("|").split("|")]
-            if len(cells) < 2 or cells[1] not in ENUMS["severity"]:
-                continue
-            statement, severity = cells[:2]
-        elif fmt == "unknown" and re.match(r"^\s*[-*]\s+\S", line):
-            severity, statement = "Medium", re.sub(r"^\s*[-*]\s+", "", line)
-        else:
-            continue
-        statement = re.sub(
-            r"`?\[(?:verified|doc-claim|reviewer-inference)\]`?\s*", "", statement
-        ).strip()
-        if not statement:
-            continue
-        digest = hashlib.sha256(statement.casefold().encode()).hexdigest()[:16]
-        result.append(
-            {
-                "id": "import-" + digest,
-                "issue_id": "import-" + digest,
-                "assumption_ids": [],
-                "statement": statement,
-                "kind": "question",
-                "severity": severity,
-                "severity_reason": "Imported severity; requires normalization against source and decision context.",
-                "origin": "reviewer",
-                "doc_support": "not_established",
-                "external_status": "not_checked",
-                "confidence": "low",
-                "sources": [
-                    {
-                        "type": "critique",
-                        "ref": f"critique:L{number}",
-                        "quote": line.strip(),
-                    }
-                ],
-                "axes": [],
-                "affects_decision": True,
-                "status": "active",
-                "resolution": "unresolved",
-                "bucket": bucket,
-                "evidence_basis": "external_fact",
-                "thesis_breaking": False,
-                "plausibly_resolvable": None,
-            }
-        )
-    return fmt, result
-
-
 def normalize(request):
     require(
-        ("findings" in request) != ("markdown" in request),
-        "supply findings or markdown, not both",
+        "markdown" not in request and "findings" in request,
+        "normalize accepts structured findings only",
     )
-    fmt, raw = (
-        ("structured", request["findings"])
-        if "findings" in request
-        else markdown_candidates(request["markdown"])
-    )
+    lenses = tuple(sequence(request.get("lenses", list(FIXED_LENSES)), "lenses"))
+    requirement_ids = request.get("requirement_ids")
+    if requirement_ids is not None:
+        requirement_ids = set(sequence(requirement_ids, "requirement_ids"))
     resolutions = obj(request.get("severity_resolutions", {}), "severity_resolutions")
     groups, seen_ids = {}, {}
-    for value in sequence(raw, "findings"):
-        f = validate_finding(value)
+    for value in sequence(request["findings"], "findings"):
+        f = validate_finding(value, lenses)
+        if requirement_ids is not None and "requirement_id" in f:
+            require(
+                f["requirement_id"] in requirement_ids,
+                f"unknown requirement_id {f['requirement_id']}",
+            )
+        require(
+            not f["affects_decision"]
+            or "requirement_id" in f
+            or "feasibility" in f["axes"],
+            "affects_decision requires a requirement_id or the feasibility axis",
+        )
         if f["id"] in seen_ids:
-            previous = seen_ids[f["id"]]
-            if fmt != "structured":
-                previous["sources"] = unique(previous["sources"] + f["sources"])
-                continue
-            require(previous == f, f"conflicting records for finding id {f['id']}")
+            require(
+                seen_ids[f["id"]] == f, f"conflicting records for finding id {f['id']}"
+            )
             continue
         seen_ids[f["id"]] = f
         groups.setdefault(f["issue_id"], []).append(f)
@@ -349,13 +218,34 @@ def normalize(request):
         set(resolutions) <= set(groups), "severity resolution names an unknown issue"
     )
     merged, conflicts = [], []
-    for issue_id, members in groups.items():
+    for issue_id in sorted(groups):
+        # Sorting makes the merge independent of dispatch order.
+        members = sorted(groups[issue_id], key=lambda m: m["id"])
         f = deepcopy(members[0])
         f["member_ids"] = unique(
             [member for m in members for member in m.get("member_ids", [m["id"]])]
         )
-        for key in ("axes", "assumption_ids", "sources"):
+        for key in ("assumption_ids", "sources"):
             f[key] = unique([item for m in members for item in m[key]])
+        f["axes"] = sorted({item for m in members for item in m["axes"]})
+        f["origin_lenses"] = sorted(
+            {lens for m in members for lens in m.get("origin_lenses", [m["lens"]])}
+        )
+        f["lens"] = f["origin_lenses"][0]
+        requirement_ids_seen = sorted(
+            {m["requirement_id"] for m in members if "requirement_id" in m}
+        )
+        f.pop("requirement_id", None)
+        if len(requirement_ids_seen) == 1:
+            f["requirement_id"] = requirement_ids_seen[0]
+        elif requirement_ids_seen:
+            conflicts.append(
+                {
+                    "issue_id": issue_id,
+                    "field": "requirement_id",
+                    "values": requirement_ids_seen,
+                }
+            )
         severities = sorted({m["severity"] for m in members})
         if issue_id in resolutions:
             choice = obj(resolutions[issue_id], "severity resolution")
@@ -380,8 +270,6 @@ def normalize(request):
             "external_status",
             "status",
             "affects_decision",
-            "thesis_breaking",
-            "plausibly_resolvable",
         ):
             values = unique([m[key] for m in members])
             if len(values) > 1:
@@ -392,10 +280,10 @@ def normalize(request):
         )
         merged.append(f)
     return {
-        "format": fmt,
+        "format": "structured",
         "findings": merged,
         "conflicts": conflicts,
-        "requires_source_review": fmt != "structured",
+        "requires_source_review": False,
     }
 
 
@@ -1306,7 +1194,7 @@ def verifier_required(findings):
     )
 
 
-def review_model_coverage(expected_roles, protocol, *, required_roles=AXES):
+def review_model_coverage(expected_roles, protocol, *, required_roles=()):
     """Compare the pre-dispatch role plan with post-dispatch observations."""
     roles = review_model_roles(protocol)
     expected = sequence(

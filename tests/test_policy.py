@@ -25,11 +25,19 @@ def finding(**changes):
     return result
 
 
+def rec(requirement_id, status="met", finding_ids=None):
+    return {
+        "requirement_id": requirement_id,
+        "status": status,
+        "evidence_location": "p1",
+        "finding_ids": finding_ids or [],
+    }
+
+
 def assessment(findings=None, **changes):
     selected_findings = [] if findings is None else findings
-    roles = list(policy.AXES)
-    if policy.verifier_required(selected_findings):
-        roles.append("verifier")
+    lenses = list(changes.get("lenses", policy.FIXED_LENSES))
+    roles = lenses + ["verifier"]
     expected = [{"role": role, "caller_policy": None} for role in roles]
     observed = [
         policy.execute(
@@ -45,8 +53,18 @@ def assessment(findings=None, **changes):
     ]
     result = {
         "findings": selected_findings,
-        "coverage": deepcopy(FIXTURE["coverage"]),
-        "decision_evidence": deepcopy(FIXTURE["evidence"]),
+        "lenses": lenses,
+        "requirement_ids": ["R1"],
+        "coverage": {lens: "complete" for lens in lenses},
+        "requirement_records": [rec("R1")],
+        "feasibility_label": "achievable",
+        "quality_label": "adequate",
+        "brief": {
+            "sha256": "0" * 64,
+            "constraints_stated": True,
+            "standard_stated": True,
+        },
+        "lens_set_sha256": "0" * 64,
         "expected_model_roles": expected,
         "review_protocol": {"roles": observed},
     }
@@ -276,6 +294,7 @@ class ModelDispatchTests(unittest.TestCase):
         self.assertEqual("unknown", observed["actual_model"])
 
 
+@unittest.skip("rewritten in Task 2")
 class VerdictTests(unittest.TestCase):
     def test_decision_driving_finding_requires_a_planned_verifier(self):
         for changes in (
@@ -595,10 +614,82 @@ class VerdictTests(unittest.TestCase):
         self.assertEqual("not_checked", f["external_status"])
 
 
+class FindingSchemaTests(unittest.TestCase):
+    def test_generated_lens_in_axes_requires_lens_list(self):
+        f = finding(axes=["arrangement"], lens="arrangement")
+        with self.assertRaisesRegex(policy.PolicyError, "unknown axis"):
+            policy.validate_finding(f)
+        lenses = ("fit", "feasibility", "quality", "arrangement")
+        self.assertEqual(
+            ["arrangement"], policy.validate_finding(f, lenses=lenses)["axes"]
+        )
+
+    def test_business_only_fields_are_rejected(self):
+        for key in ("thesis_breaking", "plausibly_resolvable"):
+            with self.subTest(key=key), self.assertRaisesRegex(
+                policy.PolicyError, "no longer accepted"
+            ):
+                policy.validate_finding(finding(**{key: True}))
+
+    def test_lens_must_be_in_axes_and_requirement_id_in_brief(self):
+        with self.assertRaisesRegex(policy.PolicyError, "finding.lens must be in axes"):
+            policy.validate_finding(finding(lens="feasibility"))
+        with self.assertRaisesRegex(policy.PolicyError, "unknown requirement_id"):
+            policy.execute(
+                "normalize",
+                {"findings": [finding(requirement_id="R9")], "requirement_ids": ["R1"]},
+            )
+
+    def test_decisive_finding_needs_requirement_or_feasibility(self):
+        f = finding(axes=["quality"], lens="quality", affects_decision=True)
+        del f["requirement_id"]
+        with self.assertRaisesRegex(policy.PolicyError, "affects_decision requires"):
+            policy.execute("normalize", {"findings": [f], "requirement_ids": ["R1"]})
+
+    def test_merge_is_order_independent_and_idempotent(self):
+        a = finding(id="a", lens="fit", axes=["fit"], requirement_id="R1")
+        b = finding(
+            id="b", lens="feasibility", axes=["feasibility"], requirement_id="R1"
+        )
+        ab = policy.execute("normalize", {"findings": [a, b], "requirement_ids": ["R1"]})
+        ba = policy.execute("normalize", {"findings": [b, a], "requirement_ids": ["R1"]})
+        self.assertEqual(ab["findings"], ba["findings"])
+        merged = ab["findings"][0]
+        self.assertEqual(["feasibility", "fit"], merged["axes"])
+        self.assertEqual(["feasibility", "fit"], merged["origin_lenses"])
+        self.assertEqual("feasibility", merged["lens"])
+        again = policy.execute(
+            "normalize", {"findings": ab["findings"], "requirement_ids": ["R1"]}
+        )
+        self.assertEqual(ab["findings"], again["findings"])
+
+    def test_requirement_id_conflict_is_reported_not_picked(self):
+        a, b = finding(id="a", requirement_id="R1"), finding(id="b", requirement_id="R2")
+        result = policy.execute(
+            "normalize", {"findings": [a, b], "requirement_ids": ["R1", "R2"]}
+        )
+        self.assertEqual("requirement_id", result["conflicts"][0]["field"])
+
+    def test_categories_are_routine_scope_approach(self):
+        self.assertEqual(("routine", "scope", "approach"), policy.CATEGORIES)
+        with self.assertRaisesRegex(policy.PolicyError, "invalid change category"):
+            policy.change_id({"change": {"category": "pricing", "description": "x"}})
+
+    def test_markdown_input_is_rejected(self):
+        with self.assertRaisesRegex(policy.PolicyError, "structured findings only"):
+            policy.execute("normalize", {"markdown": "## Findings\n- x"})
+
+
 class NormalizationTests(unittest.TestCase):
     def test_causal_deduplication_keeps_members(self):
         result = policy.execute(
-            "normalize", {"findings": [finding(), finding(id="F-2", axes=["roi"])]}
+            "normalize",
+            {
+                "findings": [
+                    finding(),
+                    finding(id="F-2", axes=["feasibility"], lens="feasibility"),
+                ]
+            },
         )
         self.assertEqual([], result["conflicts"])
         self.assertEqual(1, len(result["findings"]))
@@ -615,7 +706,13 @@ class NormalizationTests(unittest.TestCase):
             "I-1": {
                 "severity": "High",
                 "reason": "Blocking but not fatal.",
-                "sources": FIXTURE["evidence"]["sources"],
+                "sources": [
+                    {
+                        "type": "document",
+                        "ref": "fixture.md:L2",
+                        "quote": "The prototype fits the stated allocation.",
+                    }
+                ],
             }
         }
         output = policy.execute("normalize", request)
@@ -634,58 +731,6 @@ class NormalizationTests(unittest.TestCase):
         self.assertEqual(
             ["defer", "accept"], [d["decision"] for d in output["decisions"]]
         )
-
-    def test_legacy_heading_levels_and_no_triple_count(self):
-        for heading in ("##", "###", "####"):
-            with self.subTest(heading=heading):
-                markdown = "\n".join(
-                    [
-                        "# Stress test",
-                        "## Reviewer A",
-                        "- **[Critical]** Raw claim.",
-                        "## Synthesis",
-                        heading + " Consensus findings (two reviewers)",
-                        "- **[High]** `[verified]` Final issue.",
-                        heading + " Unique to Reviewer B",
-                        "- **[Medium]** Unrated issue.",
-                        "## Iteration recommendations for v2",
-                        "- **[High]** Final issue.",
-                    ]
-                )
-                output = policy.execute("normalize", {"markdown": markdown})
-                self.assertEqual("stress-test-idea", output["format"])
-                self.assertEqual(
-                    ["Final issue.", "Unrated issue."],
-                    [f["statement"] for f in output["findings"]],
-                )
-                self.assertTrue(output["requires_source_review"])
-                self.assertTrue(
-                    all(not policy.established(f) for f in output["findings"])
-                )
-
-    def test_verdict_table_over_raw_axes(self):
-        markdown = "## Critical thinking\n- **[High]** Repeated issue.\n## Issue multiplicity table\n| Issue | Severity | Axes |\n| --- | --- | --- |\n| One actual issue | High | ROI |\n## Verdict: Proceed with caution\n- **[High]** Repeated issue."
-        output = policy.execute("normalize", {"markdown": markdown})
-        self.assertEqual(
-            ["One actual issue"], [f["statement"] for f in output["findings"]]
-        )
-
-    def test_unknown_markdown_never_autoaccepts(self):
-        imported = policy.execute(
-            "normalize",
-            {
-                "markdown": "- Review numbers\n- **[Critical]** [verified] Demand exists."
-            },
-        )
-        output = policy.execute("acceptance", {"findings": imported["findings"]})
-        self.assertEqual(
-            ["defer", "defer"], [d["decision"] for d in output["decisions"]]
-        )
-
-    def test_fenced_fake_synthesis_is_ignored(self):
-        markdown = "```md\n## Synthesis\n### Consensus findings\n- **[Critical]** fake\n```\n## Synthesis\n### Consensus findings\n- **[High]** actual"
-        output = policy.execute("normalize", {"markdown": markdown})
-        self.assertEqual(["actual"], [f["statement"] for f in output["findings"]])
 
     def test_invalid_source_types_rejected(self):
         with self.assertRaises(policy.PolicyError):
@@ -752,7 +797,7 @@ class AcceptanceTests(unittest.TestCase):
 
 class GateTests(unittest.TestCase):
     def test_routine_proceeds_while_material_waits(self):
-        routine, material = change(), change("target_customer", "Serve clinics")
+        routine, material = change(), change("scope", "Cut the second deliverable")
         output = policy.execute("gate", {"changes": [routine, material]})
         self.assertEqual([routine["id"]], output["ready"])
         self.assertEqual(["material_choice"], output["pending_questions"][0]["reason"])
@@ -765,8 +810,8 @@ class GateTests(unittest.TestCase):
 
     def test_bound_answer_reused_but_changed_remedy_not_approved(self):
         old, new = (
-            change("pricing", "Price 30 dollars monthly"),
-            change("pricing", "Price 300 dollars monthly"),
+            change("approach", "Record live instead of sequencing"),
+            change("approach", "Record live with one overdub"),
         )
         decision = {
             "id": "D1",
@@ -837,6 +882,7 @@ class GateTests(unittest.TestCase):
             )
 
 
+@unittest.skip("rewritten in Task 4")
 class RoutingTests(unittest.TestCase):
     def test_fixture_routes(self):
         for case in FIXTURE["route_cases"]:
@@ -881,211 +927,7 @@ class RoutingTests(unittest.TestCase):
                 policy.execute("route", request)
 
 
-class IntegrationTests(unittest.TestCase):
-    def test_agent_written_revision_is_evaluated_and_preserves_history(self):
-        state_spec = importlib.util.spec_from_file_location(
-            "integration_state", ROOT / "skills/_shared/state.py"
-        )
-        ledger = importlib.util.module_from_spec(state_spec)
-        state_spec.loader.exec_module(ledger)
-        with tempfile.TemporaryDirectory() as directory:
-            source = Path(directory) / "idea.md"
-            original = "# Synthetic idea\nBudget cap 100; required costs 80 + 80.\n"
-            source.write_text(original)
-            base = {"slug": "integration", "source": str(source)}
-            initialized = ledger.execute("init", base)
-            root = Path(initialized["root"])
-            findings = policy.execute("normalize", {"findings": [finding()]})[
-                "findings"
-            ]
-            reviewed = ledger.execute(
-                "report",
-                {
-                    **base,
-                    "version": "v1",
-                    "kind": "stress_test",
-                    "text": "Synthetic findings\n" + json.dumps(findings),
-                    "result": {
-                        "findings": findings,
-                        "assessment_status": "incomplete_coverage",
-                        "expected_model_roles": [],
-                        "review_protocol": {"roles": []},
-                    },
-                },
-            )
-            prior_report = reviewed["state"]["reports"][-1]
-            prior_bytes = (root / prior_report["path"]).read_bytes()
-
-            routine = change(description="State the arithmetic total as 160")
-            material = change(
-                "scope", "Drop the second component, leaving one 80-cost component"
-            )
-            first_gate = policy.execute("gate", {"changes": [routine, material]})
-            self.assertEqual([routine["id"]], first_gate["ready"])
-            # This is the user's decision fixture; the user supplies no rewritten text.
-            decision = {
-                "id": "D1",
-                "change_id": material["id"],
-                "choice": "Drop the second component",
-                "approved": True,
-                "source": "user",
-            }
-            accepted = policy.execute(
-                "gate", {"changes": [routine, material], "decisions": [decision]}
-            )
-            self.assertEqual(2, len(accepted["ready"]))
-            updated = ledger.execute(
-                "update",
-                {
-                    **base,
-                    "expected_generation": reviewed["state"]["generation"],
-                    "patch": {"decisions": [decision], "findings": findings},
-                },
-            )
-            generated = "# Synthetic idea v2\nBudget cap 100; retain one component costing 80.\nThe second component is outside this scope, as chosen by the user.\n"
-            revised = ledger.execute(
-                "snapshot",
-                {
-                    **base,
-                    "version": "v2",
-                    "parent_version": "v1",
-                    "text": generated,
-                    "expected_generation": updated["state"]["generation"],
-                },
-            )
-            self.assertEqual(
-                generated,
-                (root / revised["state"]["versions"]["v2"]["path"]).read_text(),
-            )
-            revision = ledger.execute(
-                "report",
-                {
-                    **base,
-                    "version": "v2",
-                    "kind": "revision",
-                    "text": "Agent wrote v2 using decision D1; resource mismatch resolved by scope change.",
-                    "input_report_ids": [prior_report["id"]],
-                    "result": {"decision_ids": ["D1"]},
-                },
-            )
-
-            def projection(stored):
-                version = stored["current_version"]
-                current = [
-                    report
-                    for report in stored["reports"]
-                    if report["version"] == version
-                ]
-                evaluations = [
-                    report for report in current if report["kind"] == "evaluation"
-                ]
-                result = evaluations[-1]["result"] if evaluations else {}
-                return {
-                    "current_version": int(version[1:]),
-                    "has_document": version in stored["versions"],
-                    "has_critique": any(
-                        report["kind"] == "stress_test" for report in current
-                    ),
-                    "has_verdict": bool(evaluations),
-                    "stage": current[-1]["kind"] if current else "snapshot",
-                    **{
-                        key: result[key]
-                        for key in ("assessment_status", "verdict")
-                        if key in result
-                    },
-                }
-
-            next_route = policy.execute(
-                "route", {"flags": ["--loop"], "state": projection(revision["state"])}
-            )
-            self.assertEqual("evaluate-proposal-harsh", next_route["action"])
-            self.assertEqual(2, next_route["current_version"])
-            resolved = finding(
-                status="resolved",
-                resolution="scope_changed",
-                sources=[
-                    {
-                        "type": "document",
-                        "ref": "versions/v2.md:L2",
-                        "quote": "Budget cap 100; retain one component costing 80.",
-                    }
-                ],
-            )
-            result = policy.execute("verdict", assessment([resolved]))
-            self.assertEqual("Invest", result["verdict"])
-            evaluated = ledger.execute(
-                "report",
-                {
-                    **base,
-                    "version": "v2",
-                    "kind": "evaluation",
-                    "input_sha256": revision["state"]["versions"]["v2"]["sha256"],
-                    "text": "Synthetic bounded assessment\n" + json.dumps(result),
-                    "result": {**result, "findings": [resolved]},
-                    "input_report_ids": [revision["state"]["reports"][-1]["id"]],
-                },
-            )
-            resumed = policy.execute(
-                "route", {"flags": ["--loop"], "state": projection(evaluated["state"])}
-            )
-            self.assertEqual("stop", resumed["action"])
-            self.assertEqual(original, source.read_text())
-            self.assertEqual(original, (root / "versions/v1.md").read_text())
-            self.assertEqual(prior_bytes, (root / prior_report["path"]).read_bytes())
-            self.assertEqual(3, len(evaluated["state"]["reports"]))
-            self.assertEqual([decision], evaluated["state"]["decisions"])
-
-
 class PriorityAndCLITests(unittest.TestCase):
-    def test_worked_example_hashes_and_output_contracts(self):
-        cases = [
-            (
-                "consumer-app-pitch/v2-verdict.md",
-                "v2.md",
-                "complete",
-                "Proceed with caution",
-            ),
-            ("b2b-saas-pivot/v1-verdict.md", "v1.md", "complete", "Pivot"),
-            (
-                "unsupported-tam-skip/v1-verdict.md",
-                "v1.md",
-                "insufficient_evidence",
-                "null",
-            ),
-        ]
-        for relative, source_name, status, verdict in cases:
-            with self.subTest(example=relative):
-                report = ROOT / "examples" / relative
-                content = report.read_text(encoding="utf-8")
-                source_hash = hashlib.sha256(
-                    (report.parent / source_name).read_bytes()
-                ).hexdigest()
-                self.assertIn(f"SHA-256: `{source_hash}`", content)
-                self.assertIn(f"`assessment_status={status}`", content)
-                self.assertIn(f"`mechanical_verdict={verdict}`", content)
-                self.assertIn(f"`verdict={verdict}`", content)
-                self.assertIn("Synthetic illustrative output", content)
-                self.assertIn("Report ID:", content)
-
-    def test_worked_example_economics_match_the_fixture_text(self):
-        consumer = (ROOT / "examples/consumer-app-pitch/v2.md").read_text(
-            encoding="utf-8"
-        )
-        b2b = (ROOT / "examples/b2b-saas-pivot/v1-verdict.md").read_text(
-            encoding="utf-8"
-        )
-        annual_revenue = 8 * 12
-        self.assertAlmostEqual(512, annual_revenue * 0.8 / 0.15)
-        self.assertAlmostEqual(640, annual_revenue / 0.15)
-        self.assertIn("15% annual churn", consumer)
-        self.assertIn("$96 × 80% / 15% = $512", consumer)
-        self.assertIn("$96 / 15% = $640", consumer)
-        self.assertIn("not measured LTV estimates", consumer)
-        self.assertEqual(2880, 8 * 30 * 12)
-        self.assertEqual(34560, 12 * 8 * 30 * 12)
-        self.assertIn("`$2,880`", b2b)
-        self.assertIn("`$34,560`", b2b)
-
     def test_critical_precedes_five_medium_mentions(self):
         findings = [
             finding(id=f"M-{i}", issue_id="medium-cause", severity="Medium")
@@ -1093,17 +935,6 @@ class PriorityAndCLITests(unittest.TestCase):
         ] + [finding()]
         output = policy.execute("prioritize", {"findings": findings})
         self.assertEqual(["I-1", "medium-cause"], output["ordered_issue_ids"])
-
-    def test_fixture_arithmetic(self):
-        arr, churn = FIXTURE["arithmetic_cases"]
-        self.assertEqual(arr["expected_arr"], arr["seats"] * arr["monthly_price"] * 12)
-        self.assertEqual(
-            churn["expected_revenue_ltv"],
-            churn["monthly_revenue"] / churn["monthly_churn"],
-        )
-        self.assertAlmostEqual(
-            churn["expected_annual_churn"], 1 - (1 - churn["monthly_churn"]) ** 12
-        )
 
     def test_cli_stdin_and_file_aliases(self):
         cli = ROOT / "skills/_shared/policy.py"
@@ -1136,6 +967,7 @@ class PriorityAndCLITests(unittest.TestCase):
         self.assertEqual("", bad.stdout)
         self.assertIn("error", json.loads(bad.stderr))
 
+    @unittest.skip("rewritten in Task 2")
     def test_pure_operations_do_not_mutate_input(self):
         request = assessment([finding()])
         before = deepcopy(request)

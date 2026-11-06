@@ -1,15 +1,14 @@
 {
   "schema_version": 2,
   "description": "Synthetic structural fixtures; not observed model or market results.",
-  "coverage": {"critical_thinking": "complete", "feasibility": "complete", "risk": "complete", "roi": "complete"},
-  "evidence": {"sufficient": true, "rationale": "Evidence for this synthetic bounded decision.", "sources": [{"type": "document", "ref": "fixture.md:L2", "quote": "The prototype fits the stated allocation."}]},
+  "coverage": {"fit": "complete", "feasibility": "complete", "quality": "complete"},
   "base_finding": {
     "id": "F-1", "issue_id": "I-1", "assumption_ids": ["A-1"], "statement": "Line items exceed the stated resource cap.",
     "kind": "contradiction", "severity": "Critical", "severity_reason": "Blocks this bounded commitment.",
     "origin": "reviewer", "doc_support": "supported", "external_status": "not_checked", "confidence": "high",
     "sources": [{"type": "document", "ref": "fixture.md:L4", "quote": "Budget cap 100; required costs 80 + 80."}],
-    "axes": ["feasibility"], "affects_decision": true, "status": "active", "resolution": "unresolved", "bucket": "verdict",
-    "evidence_basis": "document_logic", "thesis_breaking": false, "plausibly_resolvable": true
+    "axes": ["fit"], "lens": "fit", "requirement_id": "R1", "affects_decision": true, "status": "active", "resolution": "unresolved", "bucket": "verdict",
+    "evidence_basis": "document_logic"
   },
   "verdict_cases": [
     {"name": "empty_findings_need_positive_evidence", "findings": [], "sufficient": false, "status": "insufficient_evidence", "verdict": null},
@@ -63,9 +62,5 @@
     {"name": "validate_slug_only", "request": {"flags": ["--validate"], "state": {"has_verdict": true}}, "action": "strategize-from-verdict"},
     {"name": "status_without_doc", "request": {"flags": ["--status"]}, "action": "status"},
     {"name": "reset_only_archives", "request": {"flags": ["--reset"]}, "action": "archive_state"}
-  ],
-  "arithmetic_cases": [
-    {"name": "b2b_eight_seats", "seats": 8, "monthly_price": 30, "expected_arr": 2880},
-    {"name": "monthly_churn_consistency", "monthly_revenue": 30, "monthly_churn": 0.1, "expected_revenue_ltv": 300, "expected_annual_churn": 0.717570463519}
   ]
 }

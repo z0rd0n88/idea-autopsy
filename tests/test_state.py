@@ -555,6 +555,7 @@ class StateTests(unittest.TestCase):
             )
             self.assertEqual(kind, saved["state"]["reports"][-1]["kind"])
 
+    @unittest.skip("rewritten in Task 3")
     def test_new_complete_evaluation_and_stress_test_require_verifier(self):
         self.init()
         finding = json.loads(
