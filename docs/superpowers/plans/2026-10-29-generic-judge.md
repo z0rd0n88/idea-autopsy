@@ -84,9 +84,9 @@ Not a code task. Run from the primary checkout `/home/alex/idea-autopsy`, never 
 
 `.worktrees/evidence-driven-idea-loop` is tracked as a gitlink (mode 160000) with no `.gitmodules`; a fresh clone gets an empty directory and a warning. On a branch `chore/untrack-stale-worktree`: `git rm --cached .worktrees/evidence-driven-idea-loop`, add a root `.gitignore` containing `.worktrees/`, `__pycache__/` and `.claude/reviews/`, commit, PR, merge, clean up.
 
-- [ ] **Step 1: Merge the existing hackathon-judge PR**
+- [ ] **Step 1: Clean up the dropped hackathon-judge branch**
 
-A PR for `feat/hackathon-judge` already exists: [z0rd0n88/idea-autopsy#16](https://github.com/z0rd0n88/idea-autopsy/pull/16). From the primary checkout: `gh pr merge 16 --squash`, `git pull --ff-only`, `git worktree remove .worktrees/hackathon-judge`, `git branch -D feat/hackathon-judge`, `git push origin --delete feat/hackathon-judge`.
+[z0rd0n88/idea-autopsy#16](https://github.com/z0rd0n88/idea-autopsy/pull/16) was closed unmerged (user decision: drop). GitHub keeps the PR ref, so Task 14 can still read its rubric via `refs/pull/16/head`. From the primary checkout: `git worktree remove .worktrees/hackathon-judge`, `git branch -D feat/hackathon-judge`, `git push origin --delete feat/hackathon-judge`. Expected: `git ls-remote --heads origin feat/hackathon-judge` prints nothing.
 
 - [ ] **Step 2: Remove the empty worktree**
 
@@ -117,7 +117,7 @@ In the clone, on branch `chore/rename-to-business`: set `name` to `idea-autopsy-
 - [ ] **Step 6: Verify both plugins resolve**
 
 Run: `claude plugin marketplace add z0rd0n88/idea-autopsy-business && claude plugin install idea-autopsy-business@idea-autopsy-business && claude plugin details idea-autopsy-business`
-Expected: install succeeds; the details inventory lists five skills (the four business ones plus `hackathon-judge`) and the `autopsy` command. Then in a scratch project, `/idea-autopsy-business:autopsy --slug nothing --status` returns a read-only "no state" answer without creating files.
+Expected: install succeeds; the details inventory lists the four business skills and the `autopsy` command. Then in a scratch project, `/idea-autopsy-business:autopsy --slug nothing --status` returns a read-only "no state" answer without creating files.
 
 ---
 
@@ -437,7 +437,7 @@ A `lens` reviewer never sees a second entry; only `tiebreak` does.
 **Files:**
 - Create: `skills/judge/SKILL.md`
 - Modify: `commands/autopsy.md` (full rewrite)
-- Delete: `skills/stress-test-idea/`, `skills/evaluate-proposal-harsh/`, `skills/strategize-from-verdict/`, `skills/iterate-to-v2/`, `skills/hackathon-judge/` (the generic judge supersedes it; it lives on in `idea-autopsy-business`)
+- Delete: `skills/stress-test-idea/`, `skills/evaluate-proposal-harsh/`, `skills/strategize-from-verdict/`, `skills/iterate-to-v2/`
 - Modify: `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json` (version `4.0.0`, description "Judge an entry against a brief you supply: fit, feasibility, quality and an agent-written revision."), `README.md` (minimal: one paragraph on what 4.0.0 does, the `--brief` file format, the labels, and "the business version moved to `idea-autopsy-business`"; Task 14 writes the full README)
 - Create: `tests/test_workflow.py` (replacement for the deleted integration test)
 
@@ -453,7 +453,7 @@ A `lens` reviewer never sees a second entry; only `tiebreak` does.
   8. Output: brief summary; labels, provisional flags and decision; per-requirement table; established findings with evidence; verification summary; the improvement record (every negative finding with consequence and smallest resolving change, ranked by consequence, blockers listed separately); the next action (`revise` when rewritable, otherwise end).
 - Router: inputs and flags from Task 4. Resolves state, slugifies entry names, builds the route request, executes the returned action, routes to `brief`, `judge`, `revise`, `rank`. On action `brief` in this release it reads `--brief PATH` itself (a regular file via `list_files` on its parent, four headings `Goal`, `Requirements`, `Constraints`, `Standard`; missing `Constraints` or `Standard` recorded as `not_stated`; requirements lacking IDs get `R1..Rn`; a missing `Goal` or `Requirements` heading stops with "the brief needs a Goal and a Requirements heading"), stores it with every part `provenance: user` and `confirmation` set from a routine decision record, then re-enters `route`. A resumed run whose `--brief` file hashes differently from the stored brief stops with "the brief on this slug is fixed; start a new slug". Loop and resume rules carry over from the current router minus strategy and experiments; the `archive_state` text is unchanged. The router writes `plugin_version` into every report result.
 
-- [ ] **Step 1: Write `skills/judge/SKILL.md`** (target ≤ 100 lines), the router (target ≤ 80 lines) and the minimal README. Delete the five old skill directories. Bump versions.
+- [ ] **Step 1: Write `skills/judge/SKILL.md`** (target ≤ 100 lines), the router (target ≤ 80 lines) and the minimal README. Delete the four old skill directories. Bump versions.
 - [ ] **Step 2: Write `tests/test_workflow.py`**: `test_brief_then_judge_then_revision_round_trip` drives `state.py` and `policy.py` end to end with fixture data (init with brief, judgment report saved, `route` returns `revise`, snapshot v2, second judgment, `route` returns `stop` on `yes`), asserting report IDs link and hashes match.
 - [ ] **Step 3: Verify frontmatter ceilings**: `python3 -c "import re,pathlib;[print(p, len(re.search(r'^description: (.*)$', p.read_text(), re.M).group(1))) for p in pathlib.Path('.').glob('*/*/SKILL.md')]"`. Expected: every value ≤ 1024.
 - [ ] **Step 4: Tracer bullet run.** In a scratch project under the scratchpad directory, write `plan.md` (a short hackathon project plan) and `brief.md` (goal, three requirements `R1..R3`, constraints, standard). Launch `claude --plugin-dir /home/alex/idea-autopsy/.worktrees/generic-judge` in that project and run `/idea-autopsy:autopsy plan.md --brief brief.md`. Expected: `.autopsy/plan/` holds one `judgment` report with `schema_version: 3`, `plugin_version: "4.0.0"`, a `decision` label, `lenses` equal to the three fixed lenses, `requirement_results` with exactly `R1`, `R2`, `R3`, and the output shows the per-requirement table. Record the report ID in the commit body.
@@ -582,7 +582,7 @@ A `lens` reviewer never sees a second entry; only `tiebreak` does.
 - Create: `examples/hackathon-plan/` (`brief.md`, `v1.md`, `v1-judgment.md`, `v2.md`, `v2-judgment.md`, `WALKTHROUGH.md`), `examples/track-critique/` (`brief.md`, `entry.md`, `judgment.md`, `WALKTHROUGH.md`), `examples/ranked-entries/` (`brief.md`, `entries/a.md`, `entries/b.md`, `entries/c.md`, `ranking.md`, `WALKTHROUGH.md`)
 - Modify: `examples/README.md`, `examples/edge-cases.md`, `README.md` (full rewrite: what it does, the three brief sources, the four labels, flags table, the two paths, ranking, install line), `AGENTS.md` (update the skill list if it names skills), version bump to `4.2.1`
 
-- [ ] **Step 1: Write the examples.** The hackathon brief is adapted from the rubric in the deleted `hackathon-judge` skill (`git show main:skills/hackathon-judge/SKILL.md` from before Task 7, or the business clone). Every example states "illustrative, not a runtime trace". The ranking example has one tiebreak group and one unranked entry.
+- [ ] **Step 1: Write the examples.** The hackathon brief is adapted from the rubric in the dropped `hackathon-judge` skill: `git fetch origin pull/16/head && git show FETCH_HEAD:skills/hackathon-judge/SKILL.md`. Every example states "illustrative, not a runtime trace". The ranking example has one tiebreak group and one unranked entry.
 - [ ] **Step 2: Rewrite README.** Install line: `claude plugin marketplace add z0rd0n88/idea-autopsy && claude plugin install idea-autopsy@idea-autopsy`.
 - [ ] **Step 3: Verify** `git grep -nwE 'Invest|Pivot|Proceed with caution|investment_context|strategize-from-verdict|stress-test-idea|iterate-to-v2|evaluate-proposal-harsh|product-strategist|project-idea-validator|hackathon-judge' -- ':!docs/superpowers' ':!tests/' ':!skills/_shared/policy.py'`. Expected: no hits. (Tests and `BUSINESS_TERMS` legitimately mention business words.)
 - [ ] **Step 4: Run** `python3 -m pytest -q`. Expected: PASS.
