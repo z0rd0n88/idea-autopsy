@@ -17,7 +17,6 @@ from pathlib import Path
 
 
 FIXED_LENSES = ("fit", "feasibility", "quality")
-AXES = FIXED_LENSES  # removed in Task 3 once state.py stops importing it
 RESERVED_PREFIXES = ("verifier", "derive", "tiebreak", "fact-checker")
 LENS_ID = re.compile(r"[a-z][a-z0-9-]{1,31}\Z")
 LABELS = {

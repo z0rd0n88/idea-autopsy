@@ -157,6 +157,7 @@ class EvaluationAuditTests(unittest.TestCase):
             self.assertIn("audit error:", bad.stderr)
             self.assertNotIn("Traceback", bad.stderr)
 
+    @unittest.skip("business protocol, deleted in Task 9")
     def test_additive_review_metadata_round_trips_in_existing_state(self):
         with tempfile.TemporaryDirectory() as directory:
             request = {"slug": "metadata", "project_dir": directory}
