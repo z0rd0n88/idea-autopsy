@@ -30,7 +30,6 @@ LABELS = {
     "quality": ("strong", "adequate", "weak", "cannot_judge"),
     "decision": ("yes", "not_yet", "no", "cannot_judge"),
 }
-VERDICTS = ("Invest", "Proceed with caution", "Pivot", "Skip")  # route reads it until Task 4
 CATEGORIES = ("routine", "scope", "approach")
 ENUMS = {
     "kind": ("contradiction", "missing_evidence", "risk", "question"),
@@ -721,89 +720,105 @@ def gate(request):
     return result
 
 
+THRESHOLDS = json.loads(Path(__file__).with_name("thresholds.json").read_text())
+ACTION_FLAGS = {
+    "--critique-only",
+    "--rewrite",
+    "--loop",
+    "--verify-claims",
+    "--accept-all",
+    "--accept-none",
+}
+INPUT_FLAGS = {"--brief", "--entries", "--examples", "--slug"}
+ADMIN_FLAGS = {"--status", "--reset"}
+SKILL_FLAGS = {
+    "brief": {"--examples"},
+    "judge": {"--verify-claims", "--critique-only", "--rewrite"},
+    "revise": {"--accept-all", "--accept-none"},
+    "rank": {"--verify-claims", "--critique-only"},
+}
+INTERIM_BRIEF_STOP = (
+    "Supply the brief with --brief PATH. "
+    "The interview and example-derived briefs arrive in 4.2.0."
+)
+INTERIM_RANK_STOP = "Ranking arrives in 4.1.0."
+
+
 def flag_set(flags):
-    flags = sequence(flags, "flags")
-    known = {
-        "--loop",
-        "--verify-claims",
-        "--validate",
-        "--accept-all",
-        "--accept-none",
-        "--status",
-        "--reset",
-    }
+    """Flag tokens only: '--slug name' and '--slug=name' both become '--slug'."""
+    tokens = [
+        re.split(r"[ =]", flag, maxsplit=1)[0] if isinstance(flag, str) else flag
+        for flag in sequence(flags, "flags")
+    ]
+    known = ACTION_FLAGS | INPUT_FLAGS | ADMIN_FLAGS
+    require(all(isinstance(t, str) and t in known for t in tokens), "unknown flag")
+    require(len(set(tokens)) == len(tokens), "duplicate flag")
+    tokens = set(tokens)
     require(
-        all(isinstance(flag, str) and flag in known for flag in flags), "unknown flag"
-    )
-    require(len(set(flags)) == len(flags), "duplicate flag")
-    flags = set(flags)
-    require(
-        not {"--accept-all", "--accept-none"} <= flags,
+        not {"--accept-all", "--accept-none"} <= tokens,
         "--accept-all and --accept-none conflict",
     )
     require(
-        not ({"--status", "--reset"} & flags and len(flags) > 1),
+        not (tokens & ADMIN_FLAGS and (tokens & ACTION_FLAGS or ADMIN_FLAGS <= tokens)),
         "--status/--reset cannot combine with action flags",
     )
-    return flags
+    return tokens
 
 
 def route(request):
     intent = request.get("intent", "auto")
     require(
         intent
-        in (
-            "auto",
-            "stress_test",
-            "revise",
-            "evaluate",
-            "strategy",
-            "status",
-            "reset",
-            "stop",
-        ),
+        in ("auto", "brief", "judge", "revise", "rank", "status", "reset", "stop"),
         "unknown intent",
     )
     flags = flag_set(request.get("flags", []))
     state = obj(request.get("state", {}), "state")
     version = state.get("current_version", 1)
     require(
-        type(version) is int and version >= 1,
-        "current_version must be a positive integer",
+        version is None or (type(version) is int and version >= 1),
+        "current_version must be a positive integer or null",
     )
-    stage = state.get("stage", "snapshot")
     require(
-        stage in ("snapshot", "stress_test", "revision", "evaluation", "strategy"),
+        state.get("stage", "snapshot") in ("snapshot", "judgment", "revision", "ranking"),
         "invalid stage",
     )
-    for field in ("has_document", "has_critique", "has_verdict", "can_revise"):
+    for field in ("has_document", "has_brief", "has_judgment", "can_revise"):
         if field in state:
             boolean(state[field], field)
-    for field in ("pending_questions", "pending_experiments"):
+    for field in ("pending_questions", "evidence_gaps", "entry_slugs"):
         if field in state:
             sequence(state[field], field)
-    if "verdict" in state:
-        require(
-            state["verdict"] is None or state["verdict"] in VERDICTS,
-            "invalid state verdict",
-        )
+    require(
+        state.get("decision") is None or state["decision"] in LABELS["decision"],
+        "invalid state decision",
+    )
     if "assessment_status" in state:
         require(
             state["assessment_status"]
             in ("complete", "insufficient_evidence", "incomplete_coverage"),
             "invalid assessment_status",
         )
+    rewritable = state.get("rewritable")
+    if rewritable is not None:
+        obj(rewritable, "rewritable")
+        boolean(rewritable.get("value"), "rewritable.value")
+        require(
+            rewritable.get("decided_by") in ("default", "flag", "user", "rank"),
+            "invalid rewritable.decided_by",
+        )
     inputs = sequence(request.get("inputs", []), "inputs")
     types = []
     for item in inputs:
         obj(item, "input")
         require(
-            item.get("type") in ("document", "critique", "verdict"),
+            item.get("type") in ("document", "brief", "examples", "judgment"),
             "input type must be explicit",
         )
         nonempty(item.get("ref"), "input.ref")
         types.append(item["type"])
-    if "--status" in flags or "--reset" in flags:
+
+    if flags & ADMIN_FLAGS:
         selected = "status" if "--status" in flags else "reset"
         require(
             intent in ("auto", selected),
@@ -812,7 +827,7 @@ def route(request):
         intent = selected
     if intent in ("status", "reset", "stop"):
         require(
-            flags <= {"--status", "--reset"},
+            not flags & ACTION_FLAGS,
             "administrative/stop intent cannot combine with action flags",
         )
         return {
@@ -821,163 +836,112 @@ def route(request):
             ],
             "reason": "Explicit user intent.",
             "pass_flags": [],
+            "loop_flags": [],
+            "current_version": version,
+            "rewritable": None,
         }
-    require(
-        "--validate" not in flags
-        or intent == "strategy"
-        or intent == "auto"
-        and ("verdict" in types or state.get("has_verdict", False)),
-        "--validate requires strategy intent or a supplied/stored assessment",
-    )
-    if (
-        types.count("document") > 1
-        or types.count("critique") > 1
-        or types.count("verdict") > 1
-    ):
-        return {
-            "action": "ask_input_roles",
-            "reason": "Select the current document and authoritative critique/verdict explicitly.",
-            "pass_flags": [],
-        }
-    has_doc = "document" in types or state.get("has_document", False)
-    has_critique = "critique" in types or state.get("has_critique", False)
-    has_verdict = "verdict" in types or state.get("has_verdict", False)
-    if intent == "auto" and "--validate" in flags and has_verdict:
-        intent = "strategy"
+
     loop = "--loop" in flags
+    new_rewritable = None
 
     def answer(action, reason):
-        allowed = {
-            "stress-test-idea": {"--verify-claims"},
-            "evaluate-proposal-harsh": {"--verify-claims"},
-            "iterate-to-v2": {"--accept-all", "--accept-none"},
-            "strategize-from-verdict": {"--validate"},
-        }.get(action, set())
-        action_flags = flags - {"--loop"}
-        # Loop flags remain on router state for later review/revision stages.
+        allowed = SKILL_FLAGS.get(action, set())
+        checked = flags & ACTION_FLAGS - {"--loop", "--critique-only", "--rewrite"}
         require(
-            loop
-            or action
-            not in (
-                "stress-test-idea",
-                "evaluate-proposal-harsh",
-                "iterate-to-v2",
-                "strategize-from-verdict",
-            )
-            or action_flags <= allowed,
+            loop or action not in SKILL_FLAGS or checked <= allowed,
             "flag is incompatible with the selected skill",
         )
         return {
             "action": action,
             "reason": reason,
-            "pass_flags": sorted(action_flags & allowed),
-            "loop_flags": sorted(flags) if loop else [],
+            "pass_flags": sorted(flags & ACTION_FLAGS & allowed),
+            "loop_flags": sorted(flags & ACTION_FLAGS) if loop else [],
             "current_version": version,
+            "rewritable": new_rewritable,
         }
 
-    def revise():
-        if state.get("pending_questions"):
-            return answer(
-                "ask_user",
-                "Resolve pending choices or missing facts; the agent writes the revision.",
-            )
-        if state.get("pending_experiments"):
-            return answer(
-                "await_evidence",
-                "A required experiment cannot be replaced by rewritten prose.",
-            )
-        if version >= 3:
-            return answer(
-                "version_limit",
-                "Three total versions reached; retain findings and choose a new scoped task explicitly.",
-            )
+    if any(types.count(kind) > 1 for kind in set(types)):
         return answer(
-            "iterate-to-v2" if has_critique or has_verdict else "stress-test-idea",
-            "Generate the next revision from normalized findings."
-            if has_critique or has_verdict
-            else "Generate findings before revision.",
+            "ask_input_roles", "Select one input of each kind explicitly."
         )
-
-    if (
-        not has_doc
-        and intent != "strategy"
-        and not (intent == "auto" and "verdict" in types)
-    ):
-        return answer(
-            "ask_document", "Provide idea material or a slug with an existing snapshot."
+    require(
+        not {"--critique-only", "--rewrite"} <= flags,
+        "--critique-only and --rewrite conflict",
+    )
+    slugs = list(state.get("entry_slugs", []))
+    duplicates = sorted({slug for slug in slugs if slugs.count(slug) > 1})
+    if state.get("brief_slug") in slugs:
+        duplicates.append(state["brief_slug"])
+    require(
+        not duplicates,
+        "entry slugs must be unique and differ from the brief ledger: "
+        + ", ".join(duplicates),
+    )
+    if len(slugs) > 1:
+        require(
+            not flags & {"--loop", "--rewrite", "--accept-all", "--accept-none"},
+            "rank mode judges only; it never revises",
         )
-    if intent == "stress_test":
-        return answer(
-            "stress-test-idea",
-            "Explicit re-test takes precedence over stored verdicts.",
-        )
-    if intent == "evaluate":
-        return answer(
-            "evaluate-proposal-harsh",
-            "Explicit evaluation takes precedence over stored stage.",
-        )
-    if intent == "strategy":
-        return answer(
-            "strategize-from-verdict"
-            if has_verdict
-            else "evaluate-proposal-harsh"
-            if has_doc
-            else "ask_document",
-            "Strategy requires an assessment and its findings.",
-        )
-    if intent == "revise":
-        return revise()
-    if "verdict" in types:
-        return answer(
-            "strategize-from-verdict",
-            "Typed verdict input selects strategy; path count does not determine intent.",
-        )
+    cap = THRESHOLDS["rank_max_entries"]
+    require(len(slugs) <= cap, f"at most {cap} entries can be ranked in one run")
+    require("--examples" not in flags, "--examples arrives in 4.2.0")
+    if intent == "brief":
+        return answer("brief", "Explicit brief intent.")
+    if not state.get("has_brief", False):
+        if "--brief" in flags:
+            return answer("brief", "Read and store the supplied brief first.")
+        return answer("stop", INTERIM_BRIEF_STOP)
+    if intent == "rank" or len(slugs) > 1:
+        return answer("stop", INTERIM_RANK_STOP)
+    if not state.get("has_document", False):
+        return answer("ask_document", "Provide the entry or a slug with a snapshot.")
+    flag_value = (
+        False if "--critique-only" in flags else True if "--rewrite" in flags else None
+    )
+    if flag_value is not None:
+        if rewritable is not None and rewritable["decided_by"] == "user":
+            if rewritable["value"] != flag_value:
+                return answer(
+                    "ask_user",
+                    "The flag contradicts your earlier choice about rewriting this entry.",
+                )
+        elif rewritable is None or rewritable["value"] != flag_value or rewritable[
+            "decided_by"
+        ] in ("default", "rank"):
+            new_rewritable = {"value": flag_value, "decided_by": "flag"}
+            rewritable = new_rewritable
     if state.get("pending_questions"):
-        return answer(
-            "ask_user",
-            "Pending consequential choices or missing facts require user input.",
-        )
-    if state.get("pending_experiments"):
-        return answer(
-            "await_evidence",
-            "Pending empirical evidence stops automatic text iteration.",
-        )
-    if stage == "revision" and not has_verdict:
-        return answer(
-            "evaluate-proposal-harsh", "Evaluate the generated current revision."
-        )
-    if stage == "strategy" and state.get("can_revise", False):
-        return revise()
-    if has_verdict:
-        if state.get("assessment_status") == "incomplete_coverage":
-            return answer(
-                "stop",
-                "Restore missing review coverage before explicitly reevaluating.",
-            )
-        if state.get("assessment_status") == "insufficient_evidence":
-            return answer(
-                "await_evidence",
-                "Resolve the assessment's evidence gaps before another automatic pass.",
-            )
-        if (
-            state.get("verdict") in ("Proceed with caution", "Pivot", "Skip")
-            and loop
-            and state.get("can_revise", False)
-        ):
-            return revise()
-        return answer(
-            "stop",
-            "Assessment completed; strategy or another review requires explicit intent.",
-        )
-    if has_critique:
-        return revise()
-    if loop or state.get("has_document", False):
-        return answer(
-            "stress-test-idea", "Start or resume the review from its snapshot."
-        )
+        return answer("ask_user", "Pending choices or missing facts need your input.")
+    if intent == "judge":
+        return answer("judge", "Explicit judge intent.")
+    rewritable_false = rewritable is not None and rewritable["value"] is False
+    has_judgment = state.get("has_judgment", False)
+    if intent == "revise":
+        if not has_judgment:
+            return answer("judge", "Judge the current version before revising it.")
+        if rewritable_false:
+            return answer("critique_complete", "This entry is not rewritten; the improvement record is the output.")
+        if version is not None and version >= THRESHOLDS["max_versions"]:
+            return answer("version_limit", "The version cap is reached; start a new slug to continue.")
+        return answer("revise", "Explicit revise intent.")
+    if not has_judgment:
+        return answer("judge", "No judgment exists for the current version.")
+    gaps = ", ".join(state.get("evidence_gaps", [])) or "unspecified"
+    if state.get("assessment_status") == "incomplete_coverage":
+        return answer("stop", f"Review coverage is incomplete: {gaps}. Restore it, then judge again explicitly.")
+    if state.get("assessment_status") == "insufficient_evidence":
+        return answer("stop", f"Evidence gaps remain: {gaps}. Resolve them, then judge again explicitly.")
+    if state.get("decision") == "cannot_judge":
+        return answer("stop", f"Cannot judge yet. Supply what is missing to continue: {gaps}.")
+    if rewritable_false:
+        return answer("critique_complete", "This entry is not rewritten; the improvement record is the output.")
+    if loop and state.get("decision") in ("not_yet", "no") and state.get("can_revise", False):
+        if version is not None and version >= THRESHOLDS["max_versions"]:
+            return answer("version_limit", "The version cap is reached; start a new slug to continue.")
+        return answer("revise", "Loop: revise the entry toward the brief.")
     return answer(
-        "ask_intent",
-        "Choose critique, an agent-written revision, or a decision assessment.",
+        "stop",
+        f"Judged {state.get('decision')}. An explicit revise or judge request continues.",
     )
 
 

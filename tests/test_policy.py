@@ -903,48 +903,135 @@ class GateTests(unittest.TestCase):
             )
 
 
-@unittest.skip("rewritten in Task 4")
 class RoutingTests(unittest.TestCase):
+    BASE = {"has_document": True, "has_brief": True}
+
     def test_fixture_routes(self):
         for case in FIXTURE["route_cases"]:
             with self.subTest(case=case["name"]):
-                self.assertEqual(
-                    case["action"], policy.execute("route", case["request"])["action"]
-                )
+                if "error" in case:
+                    with self.assertRaisesRegex(policy.PolicyError, case["error"]):
+                        policy.execute("route", case["request"])
+                    continue
+                result = policy.execute("route", case["request"])
+                self.assertEqual(case["action"], result["action"])
+                if "rewritable" in case:
+                    self.assertEqual(case["rewritable"], result["rewritable"])
 
-    def test_loop_flags_propagate_only_to_applicable_stage(self):
-        flags = ["--loop", "--verify-claims", "--accept-all"]
-        output = policy.execute(
-            "route",
-            {"flags": flags, "state": {"has_document": True, "has_critique": True}},
+    def test_interim_stop_texts_are_exact(self):
+        brief = policy.execute("route", {"state": {"has_document": True}})
+        self.assertEqual(policy.INTERIM_BRIEF_STOP, brief["reason"])
+        rank = policy.execute(
+            "route", {"state": dict(self.BASE, entry_slugs=["a", "b"])}
         )
-        self.assertEqual(["--accept-all"], output["pass_flags"])
-        self.assertEqual(sorted(flags), output["loop_flags"])
+        self.assertEqual("Ranking arrives in 4.1.0.", rank["reason"])
+
+    def test_revision_flags_with_several_entries_are_rejected(self):
+        for flag in ("--loop", "--rewrite", "--accept-all", "--accept-none"):
+            with self.subTest(flag=flag), self.assertRaisesRegex(
+                policy.PolicyError, "rank mode judges only"
+            ):
+                policy.execute(
+                    "route",
+                    {"flags": [flag], "state": dict(self.BASE, entry_slugs=["a", "b"])},
+                )
+        accepted = policy.execute(
+            "route",
+            {"flags": ["--critique-only"], "state": dict(self.BASE, entry_slugs=["a", "b"])},
+        )
+        self.assertEqual("stop", accepted["action"])
+
+    def test_entry_cap_from_thresholds(self):
+        cap = policy.THRESHOLDS["rank_max_entries"]
+        self.assertEqual(12, cap)
+        slugs = [f"e{n}" for n in range(cap + 1)]
+        with self.assertRaisesRegex(policy.PolicyError, f"at most {cap} entries"):
+            policy.execute("route", {"state": dict(self.BASE, entry_slugs=slugs)})
+
+    def test_input_flags_bypass_the_allowlist(self):
+        result = policy.execute(
+            "route",
+            {"flags": ["--brief", "--slug plan", "--entries"], "state": self.BASE},
+        )
+        self.assertEqual("judge", result["action"])
+        self.assertEqual([], result["pass_flags"])
+
+    def test_stored_judgment_never_rejudges_without_intent(self):
+        for decision in ("yes", "not_yet", "no", "cannot_judge"):
+            for flags in ([], ["--loop"]):
+                with self.subTest(decision=decision, flags=flags):
+                    result = policy.execute(
+                        "route",
+                        {
+                            "flags": flags,
+                            "state": dict(
+                                self.BASE,
+                                has_judgment=True,
+                                assessment_status="complete",
+                                decision=decision,
+                                can_revise=False,
+                                rewritable={"value": True, "decided_by": "default"},
+                            ),
+                        },
+                    )
+                    self.assertNotEqual("judge", result["action"])
+
+    def test_flags_override_default_rewritable_but_not_user(self):
+        state = dict(self.BASE, has_judgment=True, assessment_status="complete", decision="no")
+        for decided_by, action in (("default", "critique_complete"), ("rank", "critique_complete"), ("user", "ask_user")):
+            with self.subTest(decided_by=decided_by):
+                result = policy.execute(
+                    "route",
+                    {
+                        "flags": ["--critique-only"],
+                        "state": dict(state, rewritable={"value": True, "decided_by": decided_by}),
+                    },
+                )
+                self.assertEqual(action, result["action"])
+
+    def test_loop_flags_propagate_only_to_judge_and_revise(self):
+        judge = policy.execute(
+            "route",
+            {"flags": ["--loop", "--verify-claims", "--accept-all"], "state": self.BASE},
+        )
+        self.assertEqual("judge", judge["action"])
+        self.assertEqual(["--verify-claims"], judge["pass_flags"])
+        self.assertEqual(["--accept-all", "--loop", "--verify-claims"], judge["loop_flags"])
+        revise = policy.execute(
+            "route",
+            {
+                "flags": ["--loop", "--verify-claims", "--accept-all"],
+                "state": dict(
+                    self.BASE,
+                    has_judgment=True,
+                    assessment_status="complete",
+                    decision="not_yet",
+                    can_revise=True,
+                    rewritable={"value": True, "decided_by": "default"},
+                ),
+            },
+        )
+        self.assertEqual("revise", revise["action"])
+        self.assertEqual(["--accept-all"], revise["pass_flags"])
+        with self.assertRaisesRegex(policy.PolicyError, "incompatible"):
+            policy.execute("route", {"flags": ["--accept-all"], "state": self.BASE})
 
     def test_invalid_flags_and_state_fail(self):
-        requests = [
-            {"flags": ["--status", "--loop"]},
-            {"flags": ["--reset", "--status"]},
-            {"flags": ["--accept-none", "--accept-all"]},
-            {"flags": ["--unknown"]},
-            {
-                "intent": "stress_test",
-                "flags": ["--accept-all"],
-                "state": {"has_document": True},
-            },
-            {
-                "intent": "evaluate",
-                "flags": ["--validate"],
-                "state": {"has_document": True},
-            },
-            {"intent": "evaluate", "flags": ["--status"]},
-            {"state": {"current_version": True}},
-            {"state": {"has_document": "true"}},
-            {"state": {"current_version": "v2"}},
-            {"state": {"stage": "waiting_for_user_rewrite"}},
-        ]
-        for request in requests:
-            with self.subTest(request=request), self.assertRaises(policy.PolicyError):
+        for request, message in (
+            ({"flags": ["--unknown"]}, "unknown flag"),
+            ({"flags": ["--loop", "--loop"]}, "duplicate flag"),
+            ({"flags": ["--accept-all", "--accept-none"]}, "conflict"),
+            ({"flags": ["--status", "--loop"]}, "cannot combine"),
+            ({"flags": ["--status", "--reset"]}, "cannot combine"),
+            ({"intent": "strategy"}, "unknown intent"),
+            ({"state": {"stage": "evaluation"}}, "invalid stage"),
+            ({"state": {"decision": "Invest"}}, "invalid state decision"),
+            ({"state": {"rewritable": {"value": True, "decided_by": "agent"}}}, "decided_by"),
+            ({"inputs": [{"type": "verdict", "ref": "x"}]}, "input type"),
+        ):
+            with self.subTest(request=request), self.assertRaisesRegex(
+                policy.PolicyError, message
+            ):
                 policy.execute("route", request)
 
 
