@@ -78,7 +78,7 @@ Inputs the spec implies but no task's tests would otherwise exercise, most likel
 
 Not a code task. Run from the primary checkout `/home/alex/idea-autopsy`, never from a worktree. The user confirms step 4 before it runs.
 
-**Files:** in this repo, a root `.gitignore` and the untracked gitlink (step 0) plus two merges; in the new business clone, `plugin.json`, `marketplace.json`, `README.md`, `skills/_shared/state.py`.
+**Files:** in this repo, a root `.gitignore` and the untracked gitlink (step 0) plus one merge (step 3); in the new business clone, `plugin.json`, `marketplace.json`, `README.md`, `skills/_shared/state.py`.
 
 - [ ] **Step 0: Drop the stale tracked gitlink**
 
@@ -130,7 +130,7 @@ Expected: install succeeds; the details inventory lists the four business skills
 
 **Interfaces:**
 - Produces: `FIXED_LENSES = ("fit", "feasibility", "quality")`; `RESERVED_PREFIXES = ("verifier", "derive", "tiebreak", "fact-checker")`; `LENS_ID = re.compile(r"[a-z][a-z0-9-]{1,31}\Z")`; `CATEGORIES = ("routine", "scope", "approach")`; `LABELS = {"fit": (...), "feasibility": (...), "quality": (...), "decision": (...)}` with the Global Constraints values; `validate_finding(value, lenses=FIXED_LENSES) -> dict`; `normalize(request) -> dict` taking `findings`, `severity_resolutions`, `lenses` (list of lens IDs, default the fixed three) and `requirement_ids` (list, default `[]`). `review_model_coverage(..., required_roles=())` so nothing is evaluated from a removed constant at import.
-- Finding fields: keep `id, issue_id, statement, severity, severity_reason, kind, origin, doc_support, external_status, confidence, status, resolution, bucket, evidence_basis, affects_decision, axes, assumption_ids, sources, member_ids`. Add `lens` (required; a lens ID in `axes`) and optional `requirement_id` (must be in `requirement_ids`; absent otherwise). Remove `thesis_breaking` and `plausibly_resolvable`; a finding carrying either is rejected with "finding.thesis_breaking is no longer accepted". `affects_decision: true` requires `requirement_id` or `"feasibility" in axes`.
+- Finding fields: keep `id, issue_id, statement, severity, severity_reason, kind, origin, doc_support, external_status, confidence, status, resolution, bucket, evidence_basis, affects_decision, axes, assumption_ids, sources, member_ids`. Add `lens` (required; a lens ID in `axes`), optional `origin_lenses` (sorted list of lens IDs, each in `axes`, written by the merge rule) and optional `requirement_id` (must be in `requirement_ids`; absent otherwise). Remove `thesis_breaking` and `plausibly_resolvable`; a finding carrying either is rejected with "finding.thesis_breaking is no longer accepted". `affects_decision: true` requires `requirement_id` or `"feasibility" in axes`.
 - Merge rule in `normalize`: findings sharing an `issue_id` merge with `axes` as the sorted union, `origin_lenses` as the sorted list of every member's `lens`, `lens = origin_lenses[0]`, and `requirement_id` identical across members or a conflict entry (`conflicts[].field == "requirement_id"`) with no silent pick. Order of input never changes the output, and normalizing twice is idempotent (`origin_lenses` is accepted on input and re-derived).
 - `markdown_candidates` and the `markdown` request key are deleted; `normalize` accepts structured findings only.
 - `AXES` stays as `AXES = FIXED_LENSES  # removed in Task 3 once state.py stops importing it`. `VERDICTS` stays until Task 4 (`route` reads it).
@@ -301,7 +301,7 @@ Helpers: `rec(rid, status="met", finding_ids=None)` returns a record with `evide
 ### Task 3: Ledger schema 3
 
 **Files:**
-- Modify (line numbers at `main`): `skills/_shared/state.py:40-85` (constants), `:161-238` (`validate_findings`), `:239-270` (`validate_working_fields`), `:305-310` (schema check), `:449-528` (`validate_result`), `:530-565` (`canonical_root`), `:670-688` (`_fresh`), `:831-875` (delete `_legacy`), `:876-1081` (`execute`)
+- Modify (line numbers at `main`): `skills/_shared/state.py:40-85` (constants), `:161-238` (`validate_findings`: axes ⊆ the ledger's active lens IDs; accept `lens`, optional `origin_lenses` and optional `requirement_id` as Task 1 defines them; drop `thesis_breaking` and `plausibly_resolvable`), `:239-270` (`validate_working_fields`), `:305-310` (schema check), `:449-528` (`validate_result`), `:530-565` (`canonical_root`), `:670-688` (`_fresh`), `:831-875` (delete `_legacy`), `:876-1081` (`execute`)
 - Modify: `skills/_shared/policy.py` (remove the `AXES` alias)
 - Test: `tests/test_state.py`
 
@@ -379,7 +379,7 @@ def test_patch_fields_are_the_schema_three_set(self): ...
   18. `--loop`, `decision` in (`not_yet`, `no`), `can_revise` → `version_limit` when `current_version >= max_versions`, else `revise`.
   19. Otherwise → `stop`, reason names the decision and that an explicit `revise` or `judge` intent continues.
 
-- [ ] **Step 1: Rewrite `route_cases`** so every rule above has at least one case, including Review Focus 3 (`--entries` with one slug → `judge`), `{entry_slugs: ["a","b","c"], has_document: false, has_brief: true} → rank`, a stored `cannot_judge` → `stop`, a stored `not_yet` without `--loop` → `stop`, `--loop` with `can_revise: false` → `stop`, `--critique-only --loop` on stored `rewritable: {true, default}` → `critique_complete` with the rewrite recorded, `--critique-only` on `rewritable: null` → stored as `{false, flag}`, `--rewrite` on `{false, rank}` → `revise` path, `--rewrite` on `{false, user}` → `ask_user`, explicit `revise` on `yes` → `revise`, `--slug x --status` → `status`, two `document` inputs → `ask_input_roles`, an entry slug equal to the brief slug → `PolicyError`, `entry_count > 1` in this release → `stop` with the 4.1.0 text.
+- [ ] **Step 1: Rewrite `route_cases`** so every rule above has at least one case, including Review Focus 3 (`--entries` with one slug → `judge`), a stored `cannot_judge` → `stop`, a stored `not_yet` without `--loop` → `stop`, `--loop` with `can_revise: false` → `stop`, `--critique-only --loop` on stored `rewritable: {true, default}` → `critique_complete` with the rewrite recorded, `--critique-only` on `rewritable: null` → stored as `{false, flag}`, `--rewrite` on `{false, rank}` → `revise` path, `--rewrite` on `{false, user}` → `ask_user`, explicit `revise` on `yes` → `revise`, `--slug x --status` → `status`, two `document` inputs → `ask_input_roles`, an entry slug equal to the brief slug → `PolicyError`, `entry_count > 1` in this release → `stop` with the 4.1.0 text.
 - [ ] **Step 2: Write failing tests** (replace the skipped route tests): `test_fixture_routes`, `test_revision_flags_with_several_entries_are_rejected`, `test_duplicate_entry_slugs_are_rejected`, `test_entry_cap_from_thresholds`, `test_examples_flag_rejected_until_brief_skill`, `test_input_flags_bypass_the_allowlist`, `test_stored_judgment_never_rejudges_without_intent`, `test_flags_override_default_rewritable_but_not_user`, `test_loop_flags_propagate_only_to_judge_and_revise`, `test_invalid_flags_and_state_fail`.
 - [ ] **Step 3: Run** `python3 -m pytest tests/test_policy.py -k route -q`. Expected: FAIL.
 - [ ] **Step 4: Implement** the new `route` and `flag_set`; delete `VERDICTS`; add the threshold keys.
@@ -510,7 +510,7 @@ A `lens` reviewer never sees a second entry; only `tiebreak` does.
 ### Task 11: Ranking policy (`rank`)
 
 **Files:**
-- Modify: `skills/_shared/policy.py` (new operation), `tests/test_policy.py`, `tests/fixtures/workflow_cases.json` (`rank_cases`)
+- Modify: `skills/_shared/policy.py` (new operation `rank`; `route` rule 8's interim `stop` becomes `rank`), `tests/test_policy.py`, `tests/fixtures/workflow_cases.json` (`rank_cases`; the rule-8 route case becomes `{entry_slugs: ["a","b","c"], has_document: false, has_brief: true} → rank`)
 
 **Interfaces:**
 - Produces: `rank(request) -> {"ranked": [{"rank", "entry", "separated_by": step|null, "reason", "overridden": bool, "decision", "fit", "feasibility", "quality", "critical_count", "high_count"}], "unranked": [{"entry", "reason", "decision", "fit", "feasibility", "quality", "critical_count", "high_count"}], "ties": [[entries...]], "tiebreak_needed": [[entries...]]}`. Request: `judgments` (list of `{entry, report_id, decision, fit, feasibility, quality, critical_count, high_count, overridden: bool, evidence_gaps: [...]}`), optional `tiebreaks` (list of `{entries: [...], order: [...] | null, reason, sources}`; `order` is a permutation of `entries` or null for "cannot separate"). More than `rank_max_entries` judgments → `PolicyError`.
@@ -519,8 +519,8 @@ A `lens` reviewer never sees a second entry; only `tiebreak` does.
 - [ ] **Step 1: Add `rank_cases`**: clear order; tie split by a tiebreak order; tie with null order shares a rank; a three-way tie handled by one record; all `cannot_judge` (Review Focus 4) → `ranked` empty, `tiebreak_needed` empty, every `unranked` reason non-empty.
 - [ ] **Step 2: Write failing tests**: `test_fixture_rank_table`, `test_tiebreak_needed_lists_only_groups_without_a_record`, `test_tiebreak_record_needs_reason_sources_and_a_permutation`.
 - [ ] **Step 3: Run** `python3 -m pytest tests/test_policy.py -k rank -q`. Expected: FAIL.
-- [ ] **Step 4: Implement** `rank` and register it.
-- [ ] **Step 5: Run** the tests. Expected: PASS.
+- [ ] **Step 4: Implement** `rank`, register it, and switch route rule 8 from the interim `stop` to `rank`.
+- [ ] **Step 5: Run** `python3 -m pytest -q`. Expected: PASS.
 - [ ] **Step 6: Commit** `git commit -m "feat(policy): rank operation with mechanical order and tiebreak groups"`.
 
 ---
@@ -533,7 +533,7 @@ A `lens` reviewer never sees a second entry; only `tiebreak` does.
 
 **Interfaces:**
 - `rank` workflow:
-  1. Resolve the brief-level ledger: slug `slugify("brief-" + stem)` or `--slug`; `status` first, `init` with `project_dir` only when absent. The brief must be confirmed on it. Replace route rule 8's interim `stop` with `rank` and update its route case.
+  1. Resolve the brief-level ledger: slug `slugify("brief-" + stem)` or `--slug`; `status` first, `init` with `project_dir` only when absent. The brief must be confirmed on it.
   2. Lenses: the brief ledger's stored list is authoritative; otherwise generate once from the brief, `lens_check`, store.
   3. Entries: `list_files(DIR, exclude=[brief path])`; stop if empty. For each entry, slug from `slugify(stem)`: `status` first; `init` only when absent, copying the brief (with its confirmation) and lenses onto the entry ledger and setting `rewritable: {value: false, decided_by: "rank"}`. Compare `(current-version hash, brief_sha256, lens_set_sha256)` with the brief ledger's `entries[]` row: equal and the cited judgment is `complete` → reuse; otherwise run the `judge` skill on that slug and record the new row. A per-entry failure goes to `unranked` with the error text.
   4. Build the `rank` request from the judgment reports (labels after override, `overridden` flag, `evidence_gaps`); run `policy.py rank`.
