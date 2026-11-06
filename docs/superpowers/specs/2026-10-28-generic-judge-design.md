@@ -25,6 +25,7 @@ The evidence discipline underneath is domain-free: independent reviewers, a veri
 ## Non-goals
 
 - More than one brief per run. Entries are always judged against the same brief.
+- Image, audio or video entries. An entry is text: the thing itself or a description of it. A described painting or track is judged from the description, and the judgment says so.
 - Business or market evaluation. That is `idea-autopsy-business`.
 - Producing the entry from scratch.
 - Conducting any proposed test or experiment.
@@ -151,11 +152,11 @@ Severity still decides what the verifier must check and how the improvement reco
 
 **Finding schema (builder-check decision).** Keep `id`, `severity`, `axes` (now the active lens IDs), `kind`, `evidence`, `resolution`, `bucket`, `assumption_ids`, `independence_evidence`. Add optional `requirement_id` and `lens`. Drop `thesis_breaking`, `plausibly_resolvable`, `reusable_assets` and `decision_evidence.sufficient`; they only fed the Invest/Pivot/Caution branches. "Critical" means "defeats the goal as briefed".
 
-**The brief is immutable within a run (builder-check decision).** Revisions change the entry, never the brief. If a finding says a requirement cannot be met under the constraints, that is a blocker in the improvement record; the user may start a new run with a changed brief. Consequential change categories are therefore `scope` and `approach` only, plus `routine`. The `goal`, `requirement` and `constraint` categories named earlier are withdrawn.
+**The brief is immutable within a run (builder-check decision).** A run is the lifetime of one ledger slug: once the brief is confirmed on a slug, every judgment and revision on that slug uses that brief, and each judgment records the brief's hash. Revisions change the entry, never the brief. If a finding says a requirement cannot be met under the constraints, that is a blocker in the improvement record; the user may start a new run, on a new slug, with a changed brief. Consequential change categories are therefore `scope` and `approach` only, plus `routine`. The `goal`, `requirement` and `constraint` categories named earlier are withdrawn.
 
 ## After the judgment
 
-**Rewritable path.** `revise` (today's `iterate-to-v2`) takes the judgment's findings, proposes the smallest substantive remedy per accepted finding, asks about consequential changes, drafts the next version, saves it with a change record, and hands back to the judge. Version cap, the no-cosmetic-version rule, and the stop conditions carry over.
+**Rewritable path.** The loop revises on `not_yet` and `no`. A `yes` decision ends the loop, but an explicit request to revise is honoured on `yes` too: a competition entry can meet every requirement and still be `weak`, and the findings say what would make it stronger. `revise` (today's `iterate-to-v2`) takes the judgment's findings, proposes the smallest substantive remedy per accepted finding, asks about consequential changes, drafts the next version, saves it with a change record, and hands back to the judge. Version cap, the no-cosmetic-version rule, and the stop conditions carry over.
 
 Consequential change categories replace the business set: `scope` and `approach`. Changing either needs a user answer bound to the exact change ID, as today. `routine` stays. The brief itself is never changed by a revision (see above).
 
