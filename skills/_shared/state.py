@@ -966,9 +966,37 @@ def _check_ranking(root, result):
         )
 
 
+def _response(root, state, **extra):
+    """Ledger facts a skill passes through untouched instead of recomputing."""
+    brief = state.get("brief") or {}
+    return {
+        "root": str(root),
+        "state": state,
+        "brief_sha256": brief_sha256(brief),
+        "lens_set_sha256": lens_set_sha256(state.get("lenses") or []),
+        "requirement_ids": [item["id"] for item in brief.get("requirements", [])],
+        **extra,
+    }
+
+
 def execute(operation, request):
     require(isinstance(request, dict), "request must be a JSON object")
     json_value(request, "request")
+    if operation == "list-files":
+        require(
+            set(request) <= {"directory", "exclude"},
+            f"unknown list-files request fields: {sorted(set(request) - {'directory', 'exclude'})}",
+        )
+        directory = Path(string(request.get("directory"), "directory"))
+        require(directory.is_absolute(), "directory must be an absolute path")
+        exclude = request.get("exclude", [])
+        string_list(exclude, "exclude")
+        return {
+            "files": [
+                {"path": str(path), "slug": slugify(path.stem)}
+                for path in list_files(directory, exclude=exclude)
+            ]
+        }
     enum(
         operation,
         {
@@ -1016,7 +1044,7 @@ def execute(operation, request):
                 journal = _read(journal_path)
                 require(isinstance(journal, dict), "transaction must be an object")
                 _check_source(root, validate_state(journal.get("state")), request)
-                return {"root": str(root), "state": _finish(root, journal)}
+                return _response(root, _finish(root, journal))
             require(
                 not journal_path.exists(),
                 "pending transaction detected; run recover explicitly before continuing",
@@ -1054,7 +1082,7 @@ def execute(operation, request):
                     )
                 _advance(state, "init", {"brief_sha256": brief_sha256(state["brief"])})
                 _commit(root, state, files, None)
-                return {"root": str(root), "state": state}
+                return _response(root, state)
             state = _load(root)
             _check_source(root, state, request)
             if operation == "status":
@@ -1068,7 +1096,7 @@ def execute(operation, request):
                         != state["source"]["sha256"]
                     )
                 )
-                return {"root": str(root), "state": state, "source_changed": changed}
+                return _response(root, state, source_changed=changed)
             if operation in {"snapshot", "update"}:
                 require(
                     "expected_generation" in request,
@@ -1192,7 +1220,7 @@ def execute(operation, request):
                 details["version"] = version
             _advance(state, operation, details)
             _commit(root, state, files, state_path.read_bytes())
-            return {"root": str(root), "state": state}
+            return _response(root, state)
     except OSError:
         # The OS releases flock when the descriptor/context closes. Durable
         # journals remain intact for explicit recovery after publication failures.
@@ -1211,6 +1239,7 @@ def main(argv=None):
             "update",
             "counts",
             "recover",
+            "list-files",
         ],
     )
     parser.add_argument(

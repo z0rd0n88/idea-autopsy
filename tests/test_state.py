@@ -644,6 +644,33 @@ class StateTests(unittest.TestCase):
         self.assertIsNone(saved["version"])
         self.assertEqual(f"reports/ranking-{saved['id']}.md", saved["path"])
 
+    def test_responses_carry_ledger_hashes_and_requirement_ids(self):
+        brief = make_brief(requirements=("Runs offline", "Under two minutes"))
+        for operation in ("init", "status"):
+            with self.subTest(operation=operation):
+                fields = {"brief": brief, "lenses": LENSES} if operation == "init" else {}
+                response = self.call(operation, **fields)
+                self.assertEqual(state.brief_sha256(brief), response["brief_sha256"])
+                self.assertEqual(state.lens_set_sha256(LENSES), response["lens_set_sha256"])
+                self.assertEqual(["R1", "R2"], response["requirement_ids"])
+
+    def test_list_files_operation_returns_paths_and_slugs(self):
+        entries = self.project / "entries"
+        entries.mkdir()
+        (entries / "Track One.md").write_text("one")
+        (entries / "brief.md").write_text("brief")
+        result = state.execute(
+            "list-files",
+            {"directory": str(entries), "exclude": [str(entries / "brief.md")]},
+        )
+        self.assertEqual(
+            [{"path": str((entries / "Track One.md").resolve()), "slug": "track-one"}],
+            result["files"],
+        )
+        (entries / "x.md").symlink_to(self.doc)
+        with self.assertRaisesRegex(state.StateError, "symlinks are not accepted"):
+            state.execute("list-files", {"directory": str(entries)})
+
     def test_patch_fields_are_the_schema_three_set(self):
         self.call("init", brief=make_brief())
         for patch in ({"investment_context": {}}, {"experiments": []}):
