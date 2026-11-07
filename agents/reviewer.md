@@ -29,6 +29,7 @@ A `lens` reviewer sees one entry. Only `tiebreak` sees several.
 1. Read the brief, the lens definition and the whole entry.
 2. Examine only what the lens definition names. Anything it lists as out of scope stays out.
 3. For each issue, write a canonical finding: the statement, its location in the entry, its consequence for the goal as briefed, severity with a reason, and the evidence basis. Critical means it defeats the goal as briefed. Strengths and counterevidence go in the same report.
+   Every finding sets `lens` to your lens ID and includes that ID in `axes`. Set `affects_decision` to true only when the finding names a `requirement_id` or your lens is `feasibility`. Choose `bucket` from the contract's list.
 4. For the `fit` lens, write one record per requirement ID: `met`, `partly_met`, `not_met` or `cannot_tell`, the evidence location, and the IDs of findings that support a negative status. Requirements that are really quality bars ("release-ready", "competition standard") are judged here like any other requirement.
 5. For `feasibility`, return one of `achievable`, `achievable_with_changes`, `not_achievable`, `cannot_judge`, judged against the brief's stated constraints. For `quality`, return one of `strong`, `adequate`, `weak`, `cannot_judge`, judged against the brief's standard; with no standard stated, name the standard you assumed.
 6. Say what the material cannot show. "Cannot judge the mix from a text description" is a valid and required answer.
