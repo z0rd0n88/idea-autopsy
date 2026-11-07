@@ -5,15 +5,15 @@
     "url": "https://github.com/z0rd0n88"
   },
   "metadata": {
-    "description": "Evidence-based idea assessment and agent-written revisions.",
-    "version": "3.0.0"
+    "description": "Judge an entry against a brief you supply, with agent-written revisions.",
+    "version": "4.0.0"
   },
   "plugins": [
     {
       "name": "idea-autopsy",
       "source": "./",
-      "description": "Evidence-based idea assessment, user decisions, and agent-written revisions across four connected skills.",
-      "version": "3.0.0",
+      "description": "Judge an entry against a brief you supply: fit, feasibility, quality and an agent-written revision.",
+      "version": "4.0.0",
       "author": {
         "name": "z0rd0n88"
       },
