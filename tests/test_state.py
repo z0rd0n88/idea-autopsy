@@ -15,6 +15,63 @@ import state
 import policy
 
 
+def make_brief(goal="Ship a two-minute demo", requirements=("Runs offline",)):
+    return {
+        "goal": goal,
+        "goal_provisional": False,
+        "requirements": [
+            {
+                "id": f"R{number}",
+                "text": text,
+                "provenance": "user",
+                "support": [],
+                "contradicted_by": [],
+            }
+            for number, text in enumerate(requirements, 1)
+        ],
+        "hypotheses": [],
+        "constraints": "",
+        "standard": "",
+        "provenance": {
+            "goal": "user",
+            "constraints": "not_stated",
+            "standard": "not_stated",
+        },
+        "weakly_supported": False,
+        "example_hashes": [],
+        "confirmation": None,
+    }
+
+
+def confirmed(brief):
+    brief = dict(brief)
+    brief["confirmation"] = {
+        "decision_id": "brief-ok",
+        "brief_sha256": state.brief_sha256(brief),
+        "review_protocol": {"roles": []},
+    }
+    return brief
+
+
+LENSES = [
+    {
+        "id": lens,
+        "examine": f"How the entry does on {lens}",
+        "evidence": "Text in the entry",
+        "out_of_scope": "",
+        "origin": "fixed",
+    }
+    for lens in policy.FIXED_LENSES
+]
+GENERATED = {
+    "id": "mix",
+    "examine": "Balance between instruments",
+    "evidence": "The mix notes",
+    "out_of_scope": "",
+    "origin": "generated",
+}
+
+
 class StateTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -40,7 +97,7 @@ class StateTests(unittest.TestCase):
             },
         )
         return self.call(
-            "report", version="v1", kind="stress_test", text=text, **fields
+            "report", version="v1", kind="revision", text=text, **fields
         )
 
     def test_init_snapshots_and_nested_source_resolves_same_ledger(self):
@@ -48,7 +105,7 @@ class StateTests(unittest.TestCase):
         ledger = result["state"]
         self.assertEqual(
             (ledger["schema_version"], ledger["current_version"], ledger["generation"]),
-            (2, "v1", 1),
+            (3, "v1", 1),
         )
         snapshot = Path(result["root"]) / "versions" / "v1.md"
         self.assertEqual(snapshot.read_bytes(), self.doc.read_bytes())
@@ -174,12 +231,12 @@ class StateTests(unittest.TestCase):
             self.call("status")
         self.assertEqual(list(root.iterdir()), before)
         (root / "state.json").write_text('{"slug":"demo"}')
-        with self.assertRaisesRegex(state.StateError, "import-legacy"):
+        with self.assertRaisesRegex(state.StateError, "another Idea Autopsy version"):
             self.call("status")
         self.assertFalse((root / ".lock").exists())
 
     def test_replaced_decision_and_context_remain_in_audit_history(self):
-        initialized = self.call("init", investment_context={"budget": 10})["state"]
+        initialized = self.call("init", brief=make_brief("first"))["state"]
         decision = {
             "id": "d1",
             "change_id": "a" * 64,
@@ -192,15 +249,16 @@ class StateTests(unittest.TestCase):
         latest = self.call(
             "update",
             expected_generation=2,
-            patch={"decisions": [replacement], "investment_context": {"budget": 20}},
+            patch={"decisions": [replacement], "brief": make_brief("second")},
         )["state"]
         self.assertEqual(
-            initialized["history"][0]["details"]["investment_context"], {"budget": 10}
+            initialized["history"][0]["details"]["brief_sha256"],
+            state.brief_sha256(make_brief("first")),
         )
         changes = latest["history"][-1]["details"]["changes"]
         self.assertEqual(changes["decisions"]["before"], [decision])
         self.assertEqual(changes["decisions"]["after"], [replacement])
-        self.assertEqual(changes["investment_context"]["before"], {"budget": 10})
+        self.assertEqual(changes["brief"]["before"], make_brief("first"))
 
     def test_findings_validate_source_types_axes_and_resolution(self):
         self.init()
@@ -216,15 +274,15 @@ class StateTests(unittest.TestCase):
             "external_status": "not_checked",
             "confidence": "high",
             "sources": [{"type": "calculation", "ref": "v1:3", "quote": "2 + 2 = 5"}],
-            "axes": ["critical_thinking"],
+            "axes": ["fit"],
+            "lens": "fit",
+            "requirement_id": "R1",
             "affects_decision": True,
             "status": "active",
             "resolution": "unresolved",
             "bucket": "unique_real",
             "evidence_basis": "document_logic",
-            "thesis_breaking": False,
-            "plausibly_resolvable": True,
-            "severity_reason": "The claimed revenue changes the budget decision",
+            "severity_reason": "The arithmetic changes whether R1 is met",
         }
         for fields in (
             {"axes": ["unknown"]},
@@ -270,7 +328,7 @@ class StateTests(unittest.TestCase):
             {"input_sha256": "0" * 64},
             {
                 "result": {
-                    "verdict": "Invest",
+                    "decision": "yes",
                     "assessment_status": "incomplete_coverage",
                 }
             },
@@ -280,451 +338,405 @@ class StateTests(unittest.TestCase):
                     self.report(**extra)
         self.assertEqual(self.call("status")["state"], before)
 
-    def test_mandatory_model_gap_cannot_be_saved_as_complete_assessment(self):
-        self.init()
+    def judgment_result(self, brief, lenses, **changes):
+        roles = [lens["id"] for lens in lenses] + ["verifier"]
+        observed = [
+            policy.execute(
+                "model_observation",
+                {
+                    "preflight": policy.execute(
+                        "model_preflight", {"role": role, "dispatch_path": "inline"}
+                    ),
+                    "actual_model": "unknown",
+                },
+            )
+            for role in roles
+        ]
+        request = {
+            "findings": [],
+            "lenses": [lens["id"] for lens in lenses],
+            "requirement_ids": [item["id"] for item in brief["requirements"]],
+            "coverage": {lens["id"]: "complete" for lens in lenses},
+            "requirement_records": [
+                {
+                    "requirement_id": item["id"],
+                    "status": "met",
+                    "evidence_location": "p1",
+                    "finding_ids": [],
+                }
+                for item in brief["requirements"]
+            ],
+            "feasibility_label": "achievable",
+            "quality_label": "adequate",
+            "brief": {
+                "sha256": state.brief_sha256(brief),
+                "constraints_stated": False,
+                "standard_stated": False,
+            },
+            "lens_set_sha256": state.lens_set_sha256(lenses),
+            "expected_model_roles": [{"role": r, "caller_policy": None} for r in roles],
+            "review_protocol": {"roles": observed},
+        }
+        request.update(changes)
+        return policy.execute("judgment", request)
+
+    def judged_ledger(self, brief=None, lenses=None):
+        brief = brief or make_brief()
+        lenses = lenses or LENSES
+        self.call("init", brief=brief, lenses=lenses)
+        result = self.judgment_result(brief, lenses)
+        report = self.call(
+            "report", version="v1", kind="judgment", text="Judgment", result=result
+        )
+        return report["state"], result
+
+    def test_init_stores_brief_rewritable_and_lenses(self):
+        brief = make_brief()
+        rewritable = {"value": True, "decided_by": "default"}
+        ledger = self.call("init", brief=brief, rewritable=rewritable, lenses=LENSES)[
+            "state"
+        ]
+        self.assertEqual(1, ledger["generation"])
+        status = self.call("status")["state"]
+        self.assertEqual(
+            (brief, rewritable, LENSES),
+            (status["brief"], status["rewritable"], status["lenses"]),
+        )
+
+    def test_schema_mismatch_is_refused_before_lock_and_journal(self):
+        root = self.project / ".autopsy/demo"
+        root.mkdir(parents=True)
+        for version in (2, 4):
+            raw = json.dumps({"schema_version": version, "slug": "demo"}).encode()
+            (root / "state.json").write_bytes(raw)
+            for operation in ("status", "init"):
+                with self.subTest(version=version, operation=operation):
+                    with self.assertRaisesRegex(
+                        state.StateError, rf"another Idea Autopsy version \(schema {version}\)"
+                    ):
+                        self.call(operation)
+            self.assertFalse((root / ".lock").exists())
+            self.assertFalse((root / ".transaction.json").exists())
+            self.assertEqual(raw, (root / "state.json").read_bytes())
+
+    def test_slugify_rules(self):
+        self.assertEqual("my-entry-v2-md", state.slugify("My Entry (v2).md"))
+        self.assertEqual(80, len(state.slugify("a" * 100)))
+        self.assertEqual("brief-plan", state.slugify("brief-" + "plan"))
+        with self.assertRaisesRegex(state.StateError, "cannot derive a slug"):
+            state.slugify("!!!")
+
+    def test_list_files_refuses_symlinks_and_skips_dotfiles(self):
+        entries = self.project / "entries"
+        entries.mkdir()
+        for name in ("b.md", "a.md", ".hidden.md"):
+            (entries / name).write_text(name)
+        (entries / "nested").mkdir()
+        brief = entries / "brief.md"
+        brief.write_text("brief")
+        self.assertEqual(
+            ["a.md", "b.md"],
+            [path.name for path in state.list_files(entries, exclude=[brief])],
+        )
+        secret = self.project / "secret.txt"
+        secret.write_text("GH_TOKEN=x")
+        (entries / "c.md").symlink_to(secret)
+        with self.assertRaisesRegex(state.StateError, "symlinks are not accepted.*c.md"):
+            state.list_files(entries)
+
+    def test_symlinked_source_is_refused(self):
+        link = self.project / "link.md"
+        link.symlink_to(self.doc)
+        with self.assertRaisesRegex(state.StateError, "must not be a symlink"):
+            state.execute("init", {"slug": "linked", "source": str(link)})
+
+    def test_brief_patch_is_refused_after_confirmation_or_judgment(self):
+        self.call("init", brief=make_brief())
+        self.call("update", expected_generation=1, patch={"brief": make_brief("second")})
+        self.call(
+            "update", expected_generation=2, patch={"brief": confirmed(make_brief("third"))}
+        )
+        with self.assertRaisesRegex(state.StateError, "brief is fixed for this slug"):
+            self.call("update", expected_generation=3, patch={"brief": make_brief("fourth")})
+        other = self.project / "other.md"
+        other.write_text("other entry")
+        request = {"slug": "other", "source": str(other)}
+        brief = make_brief()
+        state.execute("init", {**request, "brief": brief, "lenses": LENSES})
+        state.execute(
+            "report",
+            {
+                **request,
+                "version": "v1",
+                "kind": "judgment",
+                "text": "J",
+                "result": self.judgment_result(brief, LENSES),
+            },
+        )
+        with self.assertRaisesRegex(state.StateError, "brief is fixed for this slug"):
+            state.execute(
+                "update",
+                {**request, "expected_generation": 2, "patch": {"brief": make_brief("x")}},
+            )
+
+    def test_lens_patch_after_judgment_needs_user_edited_origin(self):
+        lenses = LENSES + [GENERATED]
+        ledger, _ = self.judged_ledger(lenses=lenses)
+        edited = dict(GENERATED, examine="Balance of the mix at low volume")
+        with self.assertRaisesRegex(state.StateError, "origin user_edited"):
+            self.call(
+                "update",
+                expected_generation=ledger["generation"],
+                patch={"lenses": LENSES + [edited]},
+            )
+        with self.assertRaisesRegex(state.StateError, "same lens IDs"):
+            self.call(
+                "update", expected_generation=ledger["generation"], patch={"lenses": LENSES}
+            )
+        saved = self.call(
+            "update",
+            expected_generation=ledger["generation"],
+            patch={"lenses": LENSES + [dict(edited, origin="user_edited")]},
+        )["state"]
+        self.assertEqual("user_edited", saved["lenses"][-1]["origin"])
+
+    def test_new_judgment_report_must_match_stored_lenses_and_hashes(self):
+        brief, lenses = make_brief(), LENSES + [GENERATED]
+        self.call("init", brief=brief, lenses=lenses)
+        wrong_brief = self.judgment_result(brief, lenses)
+        wrong_brief["brief_sha256"] = "1" * 64
+        wrong_lenses = self.judgment_result(brief, lenses)
+        wrong_lenses["lens_set_sha256"] = "1" * 64
+        for result, message in (
+            (self.judgment_result(brief, LENSES), "stored lens panel"),
+            (wrong_brief, "brief_sha256 does not match"),
+            (wrong_lenses, "lens_set_sha256 does not match"),
+        ):
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(state.StateError, message):
+                    self.call("report", version="v1", kind="judgment", text="J", result=result)
+        partial = self.judgment_result(
+            brief,
+            lenses,
+            coverage={"fit": "complete", "feasibility": "complete", "quality": "complete", "mix": "partial"},
+        )
+        self.assertEqual("incomplete_coverage", partial["assessment_status"])
+        saved = self.call("report", version="v1", kind="judgment", text="J", result=partial)
+        self.assertEqual("cannot_judge", saved["state"]["reports"][-1]["result"]["decision"])
+
+    def test_new_judgment_report_requires_verifier_for_any_decision(self):
+        brief = make_brief()
+        self.call("init", brief=brief, lenses=LENSES)
+        result = self.judgment_result(brief, LENSES)
+        self.assertEqual("yes", result["decision"])
+        for field in ("expected_model_roles",):
+            result[field] = [r for r in result[field] if r["role"] != "verifier"]
+        result["review_protocol"]["roles"] = [
+            r for r in result["review_protocol"]["roles"] if r["role"] != "verifier"
+        ]
+        with self.assertRaisesRegex(state.StateError, "require incomplete coverage"):
+            self.call("report", version="v1", kind="judgment", text="J", result=result)
+
+    def test_judgment_gate_ports(self):
+        brief = make_brief()
+        self.call("init", brief=brief, lenses=LENSES)
+        no_plan = self.judgment_result(brief, LENSES)
+        del no_plan["expected_model_roles"]
+        with self.assertRaisesRegex(state.StateError, "requires expected_model_roles"):
+            self.call("report", version="v1", kind="judgment", text="J", result=no_plan)
+        no_findings = self.judgment_result(brief, LENSES)
+        del no_findings["findings"]
+        with self.assertRaisesRegex(state.StateError, "requires findings"):
+            self.call("report", version="v1", kind="judgment", text="J", result=no_findings)
+        mandatory = {"model": "claude-opus-5-5", "mandatory": True}
         prepared = policy.execute(
             "model_preflight",
             {
-                "role": "risk",
+                "role": "quality",
                 "dispatch_path": "inline",
-                "caller_policy": {"model": "claude-opus-5-5", "mandatory": True},
+                "caller_policy": mandatory,
                 "host_can_select": True,
                 "host_can_reveal": True,
             },
         )
-        expected = [
-            {
-                "role": "risk",
-                "caller_policy": {"model": "claude-opus-5-5", "mandatory": True},
-            }
+        gap = self.judgment_result(brief, LENSES)
+        index = [r["role"] for r in gap["expected_model_roles"]].index("quality")
+        gap["expected_model_roles"][index]["caller_policy"] = mandatory
+        gap["review_protocol"]["roles"][index] = policy.execute(
+            "model_observation", {"preflight": prepared, "actual_model": "unknown"}
+        )
+        with self.assertRaisesRegex(state.StateError, "mandatory model gap"):
+            self.call("report", version="v1", kind="judgment", text="J", result=gap)
+
+    def test_brief_level_ledger_has_no_document(self):
+        request = {"slug": "brief-plan", "project_dir": str(self.project)}
+        ledger = state.execute("init", {**request, "brief": confirmed(make_brief())})[
+            "state"
         ]
-        for actual in ("unknown", "claude-sonnet-5"):
-            with self.subTest(actual=actual):
-                role = policy.execute(
-                    "model_observation",
-                    {"preflight": prepared, "actual_model": actual},
-                )
-                with self.assertRaisesRegex(state.StateError, "mandatory model"):
-                    self.report(
-                        result={
-                            "assessment_status": "complete",
-                            "verdict": "Invest",
-                            "expected_model_roles": expected,
-                            "review_protocol": {"roles": [role]},
-                        }
-                    )
-        self.assertEqual([], self.call("status")["state"]["reports"])
-        with self.assertRaisesRegex(state.StateError, "incomplete coverage"):
-            self.report(
-                result={
-                    "assessment_status": "insufficient_evidence",
-                    "verdict": None,
-                    "expected_model_roles": expected,
-                    "review_protocol": {"roles": [role]},
+        self.assertIsNone(ledger["current_version"])
+        self.assertEqual({}, ledger["versions"])
+        self.assertIsNone(state.execute("status", request)["state"]["current_version"])
+
+    def ranking_setup(self):
+        brief = confirmed(make_brief())
+        entry = self.project / "a.md"
+        entry.write_text("Entry A")
+        entry_request = {"slug": "a", "source": str(entry)}
+        state.execute("init", {**entry_request, "brief": brief, "lenses": LENSES})
+        judged = self.judgment_result(brief, LENSES)
+        entry_state = state.execute(
+            "report",
+            {**entry_request, "version": "v1", "kind": "judgment", "text": "J", "result": judged},
+        )["state"]
+        brief_request = {"slug": "brief-plan", "project_dir": str(self.project)}
+        state.execute("init", {**brief_request, "brief": brief, "lenses": LENSES})
+        row = {
+            "rank": 1,
+            "entry": "a",
+            "separated_by": None,
+            "reason": "Only entry.",
+            "overridden": False,
+            "decision": "yes",
+            "fit": "meets",
+            "feasibility": "achievable",
+            "quality": "adequate",
+            "critical_count": 0,
+            "high_count": 0,
+        }
+        ranking = {
+            "ranked": [row],
+            "unranked": [],
+            "ties": [],
+            "tiebreaks": [],
+            "entries": [
+                {
+                    "slug": "a",
+                    "version_sha256": entry_state["versions"]["v1"]["sha256"],
+                    "brief_sha256": state.brief_sha256(brief),
+                    "lens_set_sha256": state.lens_set_sha256(LENSES),
+                    "judgment_report_id": entry_state["reports"][-1]["id"],
                 }
-            )
-        saved = self.report(
-            result={
-                "assessment_status": "incomplete_coverage",
-                "verdict": None,
-                "expected_model_roles": expected,
-                "review_protocol": {"roles": [role]},
-            }
+            ],
+            "brief_sha256": state.brief_sha256(brief),
+            "expected_model_roles": [],
+            "review_protocol": {"roles": []},
+        }
+        return brief_request, row, ranking
+
+    def test_ranking_report_saves_without_version_and_checks_cited_reports(self):
+        brief_request, row, ranking = self.ranking_setup()
+        for changes, message in (
+            ({"ranked": [dict(row, decision="no")]}, "does not match its judgment"),
+            (
+                {"entries": [dict(ranking["entries"][0], judgment_report_id="nope")]},
+                "judgment report not found",
+            ),
+            (
+                {"tiebreaks": [{"entries": ["a"], "order": None, "reason": "x", "sources": []}]},
+                "tiebreak roles were not observed",
+            ),
+        ):
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(state.StateError, message):
+                    state.execute(
+                        "report",
+                        {**brief_request, "kind": "ranking", "text": "R", "result": {**ranking, **changes}},
+                    )
+        saved = state.execute(
+            "report", {**brief_request, "kind": "ranking", "text": "R", "result": ranking}
+        )["state"]["reports"][-1]
+        self.assertIsNone(saved["version"])
+        self.assertEqual(f"reports/ranking-{saved['id']}.md", saved["path"])
+
+    def test_ranking_rejects_traversal_slugs_and_unbound_hashes(self):
+        brief_request, row, ranking = self.ranking_setup()
+        entry = ranking["entries"][0]
+        other = "0" * 64
+        real_load = state._load
+
+        def brief_ledger_only(root):
+            if root.name != brief_request["slug"]:
+                raise AssertionError(f"read an entry ledger before the slug check: {root}")
+            return real_load(root)
+
+        for changes, message, no_read in (
+            ({"entries": [dict(entry, slug="../a")]}, "ranking entry slug", True),
+            ({"ranked": [dict(row, entry="a/b")]}, "ranking entry slug", True),
+            ({"entries": [dict(entry, brief_sha256=other)]}, "does not match its judgment", False),
+            ({"entries": [dict(entry, lens_set_sha256=other)]}, "does not match its judgment", False),
+            ({"entries": [dict(entry, version_sha256=other)]}, "does not match its judgment", False),
+            ({"entries": []}, "", False),
+            ({"ranked": []}, "", False),
+        ):
+            with self.subTest(message=message or changes):
+                load = brief_ledger_only if no_read else real_load
+                with mock.patch.object(state, "_load", side_effect=load):
+                    with self.assertRaisesRegex(state.StateError, message):
+                        state.execute(
+                            "report",
+                            {**brief_request, "kind": "ranking", "text": "R", "result": {**ranking, **changes}},
+                        )
+
+    def test_responses_carry_ledger_hashes_and_requirement_ids(self):
+        brief = make_brief(requirements=("Runs offline", "Under two minutes"))
+        for operation in ("init", "status"):
+            with self.subTest(operation=operation):
+                fields = {"brief": brief, "lenses": LENSES} if operation == "init" else {}
+                response = self.call(operation, **fields)
+                self.assertEqual(state.brief_sha256(brief), response["brief_sha256"])
+                self.assertEqual(state.lens_set_sha256(LENSES), response["lens_set_sha256"])
+                self.assertEqual(["R1", "R2"], response["requirement_ids"])
+
+    def test_list_files_operation_returns_paths_and_slugs(self):
+        entries = self.project / "entries"
+        entries.mkdir()
+        (entries / "Track One.md").write_text("one")
+        (entries / "brief.md").write_text("brief")
+        result = state.execute(
+            "list-files",
+            {"directory": str(entries), "exclude": [str(entries / "brief.md")]},
         )
         self.assertEqual(
-            "incomplete_coverage",
-            saved["state"]["reports"][-1]["result"]["assessment_status"],
+            [{"path": str((entries / "Track One.md").resolve()), "slug": "track-one"}],
+            result["files"],
         )
+        (entries / "x.md").symlink_to(self.doc)
+        with self.assertRaisesRegex(state.StateError, "symlinks are not accepted"):
+            state.execute("list-files", {"directory": str(entries)})
 
-    def test_new_complete_report_rejects_an_omitted_mandatory_role(self):
-        self.init()
-        expected = [
-            {
-                "role": axis,
-                "caller_policy": (
-                    {"model": "claude-opus-5-5", "mandatory": True}
-                    if axis == "risk"
-                    else None
-                ),
-            }
-            for axis in policy.AXES
-        ]
-        observed = [
-            policy.execute(
-                "model_observation",
-                {
-                    "preflight": policy.execute(
-                        "model_preflight", {"role": axis, "dispatch_path": "inline"}
-                    ),
-                    "actual_model": "unknown",
-                },
-            )
-            for axis in policy.AXES
-            if axis != "risk"
-        ]
-        for protocol in (None, {"roles": observed}):
-            with self.subTest(protocol=protocol):
-                result = {
-                    "expected_model_roles": expected,
-                    "assessment_status": "complete",
-                    "verdict": "Invest",
-                }
-                if protocol is not None:
-                    result["review_protocol"] = protocol
-                with self.assertRaises(state.StateError):
-                    self.call(
-                        "report",
-                        version="v1",
-                        kind="evaluation",
-                        text="Verdict",
-                        result=result,
-                    )
-        self.assertEqual([], self.call("status")["state"]["reports"])
-
-    def test_new_complete_report_needs_a_role_plan_but_legacy_results_remain_readable(
-        self,
-    ):
-        self.init()
-        observed = [
-            policy.execute(
-                "model_observation",
-                {
-                    "preflight": policy.execute(
-                        "model_preflight", {"role": axis, "dispatch_path": "inline"}
-                    ),
-                    "actual_model": "unknown",
-                },
-            )
-            for axis in policy.AXES
-        ]
-        legacy_result = {
-            "assessment_status": "complete",
-            "verdict": "Invest",
-            "review_protocol": {"roles": observed},
-        }
-        state.validate_result(legacy_result)
-        with self.assertRaisesRegex(state.StateError, "expected model role"):
-            self.call(
-                "report",
-                version="v1",
-                kind="evaluation",
-                text="New verdict",
-                result=legacy_result,
-            )
-        self.assertEqual([], self.call("status")["state"]["reports"])
-
-    def test_historical_alias_observation_remains_readable(self):
-        prepared = policy.execute(
-            "model_preflight",
-            {
-                "role": "risk",
-                "dispatch_path": "inline",
-                "caller_policy": {"model": "opus", "mandatory": True},
-                "host_can_select": True,
-                "host_can_reveal": True,
-            },
-        )
-        legacy_role = policy.execute(
-            "model_observation",
-            {
-                "preflight": prepared,
-                "actual_model": "claude-haiku-5",
-                "host_resolved_model": "claude-haiku-5",
-            },
-        )
-        legacy_role.update(status="compliant", policy_compliant=True, limitation=None)
-        state.validate_result(
-            {
-                "assessment_status": "complete",
-                "verdict": "Invest",
-                "review_protocol": {"roles": [legacy_role]},
-            }
-        )
-
-    def test_complete_strategy_without_business_verdict_does_not_need_four_axes(self):
-        self.init()
-        role = policy.execute(
-            "model_observation",
-            {
-                "preflight": policy.execute(
-                    "model_preflight",
-                    {"role": "product-strategist", "dispatch_path": "registered"},
-                ),
-                "actual_model": "unknown",
-            },
-        )
-        saved = self.call(
-            "report",
-            version="v1",
-            kind="strategy",
-            text="Strategy options",
-            result={
-                "assessment_status": "complete",
-                "verdict": None,
-                "expected_model_roles": [
-                    {"role": "product-strategist", "caller_policy": None}
-                ],
-                "review_protocol": {"roles": [role]},
-            },
-        )
-        self.assertEqual("strategy", saved["state"]["reports"][-1]["kind"])
-
-    def test_complete_stress_test_and_strategy_require_planned_roles(self):
-        self.init()
-        expected = [
-            {
-                "role": "risk",
-                "caller_policy": {"model": "opus", "mandatory": True},
-            }
-        ]
-        for kind in ("stress_test", "strategy"):
-            for plan in (expected, []):
-                with self.subTest(kind=kind, plan=plan):
-                    with self.assertRaises(state.StateError):
-                        self.call(
-                            "report",
-                            version="v1",
-                            kind=kind,
-                            text="Incomplete role coverage",
-                            result={
-                                "assessment_status": "complete",
-                                "verdict": None,
-                                "expected_model_roles": plan,
-                                "review_protocol": {"roles": []},
-                            },
-                        )
-        unrelated = policy.execute(
-            "model_observation",
-            {
-                "preflight": policy.execute(
-                    "model_preflight", {"role": "risk", "dispatch_path": "inline"}
-                ),
-                "actual_model": "unknown",
-            },
-        )
-        for kind in ("stress_test", "strategy"):
-            with self.subTest(kind=kind, unrelated_role=True):
-                with self.assertRaises(state.StateError):
-                    self.call(
-                        "report",
-                        version="v1",
-                        kind=kind,
-                        text="Unrelated role",
-                        result={
-                            "assessment_status": "complete",
-                            "verdict": None,
-                            "expected_model_roles": [
-                                {"role": "risk", "caller_policy": None}
-                            ],
-                            "review_protocol": {"roles": [unrelated]},
-                        },
-                    )
-        self.assertEqual([], self.call("status")["state"]["reports"])
-        required_roles = {
-            "stress_test": ("A", "B", "C", "verifier"),
-            "strategy": ("product-strategist",),
-        }
-        for kind in ("stress_test", "strategy"):
-            roles = required_roles[kind]
-            observed = [
-                policy.execute(
-                    "model_observation",
-                    {
-                        "preflight": policy.execute(
-                            "model_preflight",
-                            {"role": role, "dispatch_path": "inline"},
-                        ),
-                        "actual_model": "unknown",
-                    },
-                )
-                for role in roles
-            ]
-            saved = self.call(
-                "report",
-                version="v1",
-                kind=kind,
-                text="Complete role coverage",
-                result={
-                    "assessment_status": "complete",
-                    "verdict": None,
-                    "expected_model_roles": [
-                        {"role": role, "caller_policy": None} for role in roles
-                    ],
-                    "review_protocol": {"roles": observed},
-                },
-            )
-            self.assertEqual(kind, saved["state"]["reports"][-1]["kind"])
-
-    def test_new_complete_evaluation_and_stress_test_require_verifier(self):
-        self.init()
-        finding = json.loads(
-            (SHARED.parents[1] / "tests/fixtures/workflow_cases.json").read_text()
-        )["base_finding"]
-        for kind, roles in (
-            ("evaluation", policy.AXES),
-            ("stress_test", ("A", "B", "C")),
-        ):
-            observed = [
-                policy.execute(
-                    "model_observation",
-                    {
-                        "preflight": policy.execute(
-                            "model_preflight",
-                            {"role": role, "dispatch_path": "inline"},
-                        ),
-                        "actual_model": "unknown",
-                    },
-                )
-                for role in roles
-            ]
-            with self.subTest(kind=kind):
-                with self.assertRaisesRegex(state.StateError, "verifier"):
-                    self.call(
-                        "report",
-                        version="v1",
-                        kind=kind,
-                        text="Unverified decision-driving finding",
-                        result={
-                            "assessment_status": "complete",
-                            "verdict": (
-                                "Proceed with caution" if kind == "evaluation" else None
-                            ),
-                            "findings": [finding],
-                            "expected_model_roles": [
-                                {"role": role, "caller_policy": None} for role in roles
-                            ],
-                            "review_protocol": {"roles": observed},
-                        },
-                    )
-
-    def test_complete_evaluation_declares_when_there_are_no_findings(self):
-        self.init()
-        observed = [
-            policy.execute(
-                "model_observation",
-                {
-                    "preflight": policy.execute(
-                        "model_preflight",
-                        {"role": role, "dispatch_path": "inline"},
-                    ),
-                    "actual_model": "unknown",
-                },
-            )
-            for role in policy.AXES
-        ]
-        result = {
-            "assessment_status": "complete",
-            "verdict": "Invest",
-            "expected_model_roles": [
-                {"role": role, "caller_policy": None} for role in policy.AXES
-            ],
-            "review_protocol": {"roles": observed},
-        }
-        with self.assertRaisesRegex(state.StateError, "findings"):
-            self.call(
-                "report",
-                version="v1",
-                kind="evaluation",
-                text="Missing findings declaration",
-                result=result,
-            )
-        saved = self.call(
-            "report",
-            version="v1",
-            kind="evaluation",
-            text="Explicitly no findings",
-            result={**result, "findings": []},
-        )
-        self.assertEqual("evaluation", saved["state"]["reports"][-1]["kind"])
-
-    def test_missing_planned_role_requires_incomplete_coverage_status(self):
-        self.init()
-        result = {
-            "expected_model_roles": [
-                {
-                    "role": "risk",
-                    "caller_policy": {"model": "opus", "mandatory": True},
-                }
-            ],
-            "review_protocol": {"roles": []},
-            "verdict": None,
-        }
-        for kind in ("stress_test", "strategy"):
-            for status in ("insufficient_evidence", None):
-                with self.subTest(kind=kind, status=status):
-                    attempt = {**result}
-                    if status is not None:
-                        attempt["assessment_status"] = status
-                    with self.assertRaises(state.StateError):
-                        self.call(
-                            "report",
-                            version="v1",
-                            kind=kind,
-                            text="Missing role mislabeled",
-                            result=attempt,
-                        )
-            saved = self.call(
-                "report",
-                version="v1",
-                kind=kind,
-                text="Missing role disclosed",
-                result={**result, "assessment_status": "incomplete_coverage"},
-            )
-            self.assertEqual(
-                "incomplete_coverage",
-                saved["state"]["reports"][-1]["result"]["assessment_status"],
-            )
-
-    def test_new_judgment_reports_require_explicit_coverage_fields(self):
-        self.init()
-        missing_fields = (
-            {},
-            {"assessment_status": "incomplete_coverage"},
-            {"assessment_status": "incomplete_coverage", "expected_model_roles": []},
-            {
-                "assessment_status": "incomplete_coverage",
-                "review_protocol": {"roles": []},
-            },
-        )
-        for kind in ("evaluation", "stress_test", "strategy"):
-            for result in missing_fields:
-                with self.subTest(kind=kind, result=result):
-                    with self.assertRaises(state.StateError):
-                        self.call(
-                            "report",
-                            version="v1",
-                            kind=kind,
-                            text="Narrative without complete provenance",
-                            result=result,
-                        )
-        self.assertEqual([], self.call("status")["state"]["reports"])
-        state.validate_result({}, new_report=False, report_kind="evaluation")
+    def test_patch_fields_are_the_schema_three_set(self):
+        self.call("init", brief=make_brief())
+        for patch in ({"investment_context": {}}, {"experiments": []}):
+            with self.subTest(patch=patch):
+                with self.assertRaisesRegex(state.StateError, "patch may contain only"):
+                    self.call("update", expected_generation=1, patch=patch)
+        self.call("update", expected_generation=1, patch={"brief": make_brief("next")})
 
     def test_generation_preconditions_prevent_lost_working_state_updates(self):
         self.init()
         with self.assertRaisesRegex(state.StateError, "requires expected_generation"):
-            self.call("update", patch={"investment_context": {"budget": 10}})
+            self.call("update", patch={"brief": make_brief("budget 10")})
         updated = self.call(
             "update",
             expected_generation=1,
-            patch={"investment_context": {"budget": 10, "currency": "USD"}},
+            patch={"brief": make_brief("budget 10")},
         )
         with self.assertRaisesRegex(state.StateError, "generation conflict"):
             self.call(
                 "update",
                 expected_generation=1,
-                patch={"investment_context": {"budget": 20}},
+                patch={"brief": make_brief("budget 20")},
             )
         self.assertEqual(self.call("status")["state"], updated["state"])
         self.report()
         self.assertEqual(
-            self.call("status")["state"]["investment_context"]["budget"], 10
+            self.call("status")["state"]["brief"]["goal"], "budget 10"
         )
 
     def test_nested_validation_rejects_bad_records_without_changing_ledger(self):
         self.init()
         bad_patches = [
-            {"investment_context": []},
+            {"brief": []},
             {"word_counts": {}},
             {
                 "questions": [
@@ -769,13 +781,8 @@ class StateTests(unittest.TestCase):
                     }
                 ]
             },
-            {
-                "experiments": [
-                    {"id": "e", "hypothesis": "retention", "status": "imagined"}
-                ]
-            },
             {"findings": [{"id": "f", "statement": "missing nested evidence"}]},
-            {"investment_context": {"budget": float("nan")}},
+            {"brief": {"goal": float("nan")}},
         ]
         before = self.call("status")["state"]
         for patch in bad_patches:
@@ -803,9 +810,6 @@ class StateTests(unittest.TestCase):
             patch={
                 "decisions": [decision],
                 "questions": [question],
-                "experiments": [
-                    {"id": "e", "hypothesis": "retention", "status": "proposed"}
-                ],
             },
         )
         self.assertEqual(result["state"]["decisions"], [decision])
@@ -849,25 +853,6 @@ class StateTests(unittest.TestCase):
         path.write_text(json.dumps(data))
         with self.assertRaisesRegex(state.StateError, "safe relative path"):
             self.call("status")
-
-    def test_legacy_import_is_explicit_preserves_bytes_and_distrusts_verdicts(self):
-        root = self.project / ".autopsy/demo"
-        root.mkdir(parents=True)
-        raw = b'{ "slug":"demo", "current_version":"v9", "word_counts":{"v9":2}, "verdict":"Invest" }\n'
-        (root / "state.json").write_bytes(raw)
-        (root / "v9.md").write_text("historical proposal")
-        for operation in ("status", "counts"):
-            with self.assertRaisesRegex(state.StateError, "import-legacy"):
-                self.call(operation)
-        with self.assertRaisesRegex(state.StateError, "acknowledge_untrusted"):
-            self.call("import-legacy")
-        self.assertEqual((root / "state.json").read_bytes(), raw)
-        ledger = self.call("import-legacy", acknowledge_untrusted=True)["state"]
-        self.assertEqual((root / ledger["legacy_backups"][0]["path"]).read_bytes(), raw)
-        self.assertEqual(ledger["reports"], [])
-        self.assertEqual(ledger["word_counts"], {})
-        self.assertEqual(ledger["current_version"], "v1")
-        self.assertEqual((root / "v9.md").read_text(), "historical proposal")
 
     def test_interrupted_artifact_publish_requires_explicit_hash_checked_recovery(self):
         result = self.init()
@@ -939,7 +924,7 @@ class StateTests(unittest.TestCase):
             request = {
                 **self.request,
                 "version": "v1",
-                "kind": "stress_test",
+                "kind": "revision",
                 "text": f"review {index}",
                 "result": {
                     "assessment_status": "incomplete_coverage",
@@ -976,7 +961,7 @@ class StateTests(unittest.TestCase):
             request = {
                 **self.request,
                 "expected_generation": 1,
-                "patch": {"investment_context": {"budget": budget}},
+                "patch": {"brief": make_brief(f"budget {budget}")},
             }
             process = subprocess.Popen(
                 [sys.executable, str(SHARED / "state.py"), "update", "--request", "-"],

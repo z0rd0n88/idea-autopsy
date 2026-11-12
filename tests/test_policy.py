@@ -25,11 +25,19 @@ def finding(**changes):
     return result
 
 
+def rec(requirement_id, status="met", finding_ids=None):
+    return {
+        "requirement_id": requirement_id,
+        "status": status,
+        "evidence_location": "p1",
+        "finding_ids": finding_ids or [],
+    }
+
+
 def assessment(findings=None, **changes):
     selected_findings = [] if findings is None else findings
-    roles = list(policy.AXES)
-    if policy.verifier_required(selected_findings):
-        roles.append("verifier")
+    lenses = list(changes.get("lenses", policy.FIXED_LENSES))
+    roles = lenses + ["verifier"]
     expected = [{"role": role, "caller_policy": None} for role in roles]
     observed = [
         policy.execute(
@@ -45,8 +53,18 @@ def assessment(findings=None, **changes):
     ]
     result = {
         "findings": selected_findings,
-        "coverage": deepcopy(FIXTURE["coverage"]),
-        "decision_evidence": deepcopy(FIXTURE["evidence"]),
+        "lenses": lenses,
+        "requirement_ids": ["R1"],
+        "coverage": {lens: "complete" for lens in lenses},
+        "requirement_records": [rec("R1")],
+        "feasibility_label": "achievable",
+        "quality_label": "adequate",
+        "brief": {
+            "sha256": "0" * 64,
+            "constraints_stated": True,
+            "standard_stated": True,
+        },
+        "lens_set_sha256": "0" * 64,
         "expected_model_roles": expected,
         "review_protocol": {"roles": observed},
     }
@@ -276,94 +294,186 @@ class ModelDispatchTests(unittest.TestCase):
         self.assertEqual("unknown", observed["actual_model"])
 
 
-class VerdictTests(unittest.TestCase):
-    def test_decision_driving_finding_requires_a_planned_verifier(self):
-        for changes in (
-            {"severity": "High"},
-            {"severity": "Medium", "affects_decision": True},
+SOURCES = [
+    {
+        "type": "document",
+        "ref": "fixture.md:L2",
+        "quote": "The prototype fits the stated allocation.",
+    }
+]
+
+
+def without_role(request, role):
+    request["expected_model_roles"] = [
+        item for item in request["expected_model_roles"] if item["role"] != role
+    ]
+    request["review_protocol"]["roles"] = [
+        item for item in request["review_protocol"]["roles"] if item["role"] != role
+    ]
+    return request
+
+
+def role_index(request, role):
+    return [item["role"] for item in request["expected_model_roles"]].index(role)
+
+
+class JudgmentTests(unittest.TestCase):
+    def test_fixture_judgment_table(self):
+        for case in FIXTURE["judgment_cases"]:
+            with self.subTest(case=case["name"]):
+                request = assessment(
+                    [finding(**f) for f in case["findings"]], **deepcopy(case["request"])
+                )
+                result = policy.execute("judgment", request)
+                for key, value in case["expected"].items():
+                    self.assertEqual(value, result[key], key)
+
+    def test_requirement_records_must_cover_the_brief_exactly(self):
+        for records in (
+            [],
+            [rec("R1")],
+            [rec("R1"), rec("R1"), rec("R2")],
+            [rec("R1"), rec("R3")],
         ):
-            with self.subTest(changes=changes):
-                request = assessment([finding(**changes)])
-                request["expected_model_roles"] = [
-                    item
-                    for item in request["expected_model_roles"]
-                    if item["role"] != "verifier"
-                ]
-                request["review_protocol"]["roles"] = [
-                    item
-                    for item in request["review_protocol"]["roles"]
-                    if item["role"] != "verifier"
-                ]
-                result = policy.execute("verdict", request)
-                self.assertEqual("incomplete_coverage", result["assessment_status"])
-                self.assertIsNone(result["verdict"])
-                self.assertIn("verifier", result["review_role_gaps"])
-        no_verifier_needed = policy.execute(
-            "verdict",
-            assessment([finding(severity="Medium", affects_decision=False)]),
+            with self.subTest(records=records), self.assertRaisesRegex(
+                policy.PolicyError, "requirement_records must cover"
+            ):
+                policy.execute(
+                    "judgment",
+                    assessment(requirement_ids=["R1", "R2"], requirement_records=records),
+                )
+
+    def test_critical_with_requirement_id_forces_not_met(self):
+        f = finding()
+        result = policy.execute(
+            "judgment", assessment([f], requirement_records=[rec("R1", "met")])
         )
-        self.assertEqual("complete", no_verifier_needed["assessment_status"])
-        self.assertNotIn("verifier", no_verifier_needed["review_role_gaps"])
+        self.assertEqual("not_met", result["requirement_results"]["R1"]["status"])
+        self.assertEqual([f["id"]], result["requirement_results"]["R1"]["forced_by"])
+        self.assertEqual("does_not_meet", result["fit"])
+        self.assertEqual("no", result["decision"])
 
-    def test_missing_mandatory_role_cannot_complete_a_verdict(self):
-        expected = [
-            {
-                "role": axis,
-                "caller_policy": (
-                    {"model": "claude-opus-5-5", "mandatory": True}
-                    if axis == "risk"
-                    else None
-                ),
-            }
-            for axis in policy.AXES
-        ]
-        observed = [
-            policy.execute(
-                "model_observation",
-                {
-                    "preflight": policy.execute(
-                        "model_preflight", {"role": axis, "dispatch_path": "inline"}
-                    ),
-                    "actual_model": "unknown",
-                },
-            )
-            for axis in policy.AXES
-            if axis != "risk"
-        ]
-        for protocol in (
-            None,
-            {"roles": observed},
-            assessment()["review_protocol"],
-        ):
-            with self.subTest(protocol=protocol):
-                request = assessment(expected_model_roles=expected)
-                if protocol is None:
-                    del request["review_protocol"]
-                else:
-                    request["review_protocol"] = protocol
-                result = policy.execute("verdict", request)
+    def test_negative_record_without_established_finding_is_cannot_tell(self):
+        result = policy.execute(
+            "judgment",
+            assessment(requirement_records=[rec("R1", "not_met", finding_ids=[])]),
+        )
+        self.assertEqual("cannot_tell", result["requirement_results"]["R1"]["status"])
+        self.assertEqual("cannot_judge", result["fit"])
+
+    def test_high_on_feasibility_raises_floor_but_never_lowers(self):
+        high = finding(severity="High", axes=["feasibility"], lens="feasibility")
+        raised = policy.execute("judgment", assessment([high]))
+        self.assertEqual("achievable_with_changes", raised["feasibility"])
+        self.assertEqual("not_yet", raised["decision"])
+        kept = policy.execute(
+            "judgment", assessment([high], feasibility_label="not_achievable")
+        )
+        self.assertEqual("not_achievable", kept["feasibility"])
+
+    def test_quality_never_moves_decision(self):
+        result = policy.execute("judgment", assessment(quality_label="weak"))
+        self.assertEqual("weak", result["quality"])
+        self.assertEqual("yes", result["decision"])
+
+    def test_override_rederives_decision_and_needs_user_decision_to_improve(self):
+        down = {
+            "labels": {"fit": "does_not_meet"},
+            "reason": "The chorus misses the brief's tempo rule.",
+            "sources": SOURCES,
+        }
+        result = policy.execute("judgment", assessment(override=down))
+        self.assertEqual("no", result["decision"])
+        self.assertEqual("yes", result["mechanical"]["decision"])
+        self.assertEqual(down, result["override"])
+        up = {"labels": {"fit": "meets"}, "reason": "Reviewer misread R1.", "sources": SOURCES}
+        with self.assertRaisesRegex(policy.PolicyError, "decision_id"):
+            policy.execute("judgment", assessment([finding()], override=up))
+        up["decision_id"] = "D-7"
+        lifted = policy.execute("judgment", assessment([finding()], override=up))
+        self.assertEqual("yes", lifted["decision"])
+        self.assertEqual("no", lifted["mechanical"]["decision"])
+        partial = assessment(override=down)
+        partial["coverage"]["quality"] = "failed"
+        with self.assertRaisesRegex(policy.PolicyError, "override cannot bypass"):
+            policy.execute("judgment", partial)
+        to_unknown = dict(down, labels={"fit": "cannot_judge"})
+        with self.assertRaisesRegex(policy.PolicyError, "override cannot set"):
+            policy.execute("judgment", assessment(override=to_unknown))
+
+    def test_coverage_must_match_active_lenses(self):
+        request = assessment(lenses=["fit", "feasibility", "quality", "mix"])
+        del request["coverage"]["mix"]
+        with self.assertRaisesRegex(policy.PolicyError, "coverage must name exactly"):
+            policy.execute("judgment", request)
+
+    def test_provisional_flags_follow_the_brief(self):
+        result = policy.execute(
+            "judgment",
+            assessment(
+                brief={"sha256": "0" * 64, "constraints_stated": False, "standard_stated": False}
+            ),
+        )
+        self.assertTrue(result["feasibility_provisional"])
+        self.assertTrue(result["quality_provisional"])
+        stated = policy.execute("judgment", assessment())
+        self.assertFalse(stated["feasibility_provisional"])
+        self.assertFalse(stated["quality_provisional"])
+
+    def test_verifier_required_for_any_decision(self):
+        for findings, decision in (([], "yes"), ([finding()], "no")):
+            with self.subTest(decision=decision):
+                result = policy.execute(
+                    "judgment", without_role(assessment(findings), "verifier")
+                )
                 self.assertEqual("incomplete_coverage", result["assessment_status"])
-                self.assertIsNone(result["verdict"])
-                self.assertIn("risk", result["model_policy_gaps"])
+                self.assertEqual("cannot_judge", result["decision"])
+                self.assertIn("verifier", result["review_role_gaps"])
+        vacuous = assessment(
+            requirement_ids=[], requirement_records=[], feasibility_label="cannot_judge"
+        )
+        result = policy.execute("judgment", without_role(vacuous, "verifier"))
+        self.assertEqual("complete", result["assessment_status"])
 
-    def test_complete_verdict_requires_a_predispatch_role_plan(self):
+    def test_missing_mandatory_role_cannot_complete_a_judgment(self):
+        request = assessment()
+        mandatory = {"model": "claude-opus-5-5", "mandatory": True}
+        request["expected_model_roles"][role_index(request, "quality")]["caller_policy"] = mandatory
+        for protocol in (None, "drop_quality", "keep"):
+            with self.subTest(protocol=protocol):
+                attempt = deepcopy(request)
+                if protocol is None:
+                    del attempt["review_protocol"]
+                elif protocol == "drop_quality":
+                    attempt["review_protocol"]["roles"] = [
+                        r for r in attempt["review_protocol"]["roles"] if r["role"] != "quality"
+                    ]
+                result = policy.execute("judgment", attempt)
+                self.assertEqual("incomplete_coverage", result["assessment_status"])
+                self.assertEqual("cannot_judge", result["decision"])
+                self.assertIn("quality", result["model_policy_gaps"])
+
+    def test_complete_judgment_requires_a_predispatch_role_plan(self):
         request = assessment()
         del request["expected_model_roles"]
-        result = policy.execute("verdict", request)
+        result = policy.execute("judgment", request)
         self.assertEqual("incomplete_coverage", result["assessment_status"])
-        self.assertIsNone(result["verdict"])
-        self.assertEqual(sorted(policy.AXES), result["review_role_gaps"])
+        self.assertEqual("cannot_judge", result["decision"])
+        self.assertEqual(
+            sorted(list(policy.FIXED_LENSES) + ["verifier"]), result["review_role_gaps"]
+        )
 
     def test_blocked_reviewer_cannot_count_as_complete_coverage(self):
         request = assessment()
-        request["expected_model_roles"][policy.AXES.index("risk")]["caller_policy"] = {
+        index = role_index(request, "quality")
+        request["expected_model_roles"][index]["caller_policy"] = {
             "model": "opus",
             "mandatory": False,
         }
         prepared = policy.execute(
             "model_preflight",
             {
-                "role": "risk",
+                "role": "quality",
                 "dispatch_path": "registered",
                 "caller_policy": {"model": "opus", "mandatory": False},
                 "agent_model_pin": "sonnet",
@@ -373,22 +483,22 @@ class VerdictTests(unittest.TestCase):
             },
         )
         self.assertFalse(prepared["dispatch_allowed"])
-        request["review_protocol"]["roles"][policy.AXES.index("risk")] = policy.execute(
-            "model_observation",
-            {"preflight": prepared, "actual_model": "unknown"},
+        request["review_protocol"]["roles"][index] = policy.execute(
+            "model_observation", {"preflight": prepared, "actual_model": "unknown"}
         )
-        result = policy.execute("verdict", request)
+        result = policy.execute("judgment", request)
         self.assertEqual("incomplete_coverage", result["assessment_status"])
-        self.assertIsNone(result["verdict"])
-        self.assertIn("risk", result["review_role_gaps"])
+        self.assertEqual("cannot_judge", result["decision"])
+        self.assertIn("quality", result["review_role_gaps"])
 
     def test_mandatory_model_gap_uses_incomplete_coverage_path(self):
+        mandatory = {"model": "claude-opus-5-5", "mandatory": True}
         prepared = policy.execute(
             "model_preflight",
             {
-                "role": "risk",
+                "role": "quality",
                 "dispatch_path": "inline",
-                "caller_policy": {"model": "claude-opus-5-5", "mandatory": True},
+                "caller_policy": mandatory,
                 "host_can_select": True,
                 "host_can_reveal": True,
             },
@@ -397,24 +507,20 @@ class VerdictTests(unittest.TestCase):
             "model_observation", {"preflight": prepared, "actual_model": "unknown"}
         )
         request = assessment()
-        request["expected_model_roles"][policy.AXES.index("risk")]["caller_policy"] = {
-            "model": "claude-opus-5-5",
-            "mandatory": True,
-        }
-        request["review_protocol"]["roles"][policy.AXES.index("risk")] = role
-        result = policy.execute("verdict", request)
+        index = role_index(request, "quality")
+        request["expected_model_roles"][index]["caller_policy"] = mandatory
+        request["review_protocol"]["roles"][index] = role
+        result = policy.execute("judgment", request)
         self.assertEqual("incomplete_coverage", result["assessment_status"])
-        self.assertIsNone(result["verdict"])
-        self.assertEqual(["risk"], result["model_policy_gaps"])
-        self.assertEqual(
-            role, result["review_protocol"]["roles"][policy.AXES.index("risk")]
-        )
+        self.assertEqual("cannot_judge", result["decision"])
+        self.assertEqual(["quality"], result["model_policy_gaps"])
+        self.assertEqual(role, result["review_protocol"]["roles"][index])
 
-    def test_confirmed_mandatory_alias_can_complete_a_verdict(self):
+    def test_confirmed_mandatory_alias_can_complete_a_judgment(self):
         prepared = policy.execute(
             "model_preflight",
             {
-                "role": "risk",
+                "role": "quality",
                 "dispatch_path": "inline",
                 "caller_policy": {"model": "opus", "mandatory": True},
                 "host_can_select": True,
@@ -430,65 +536,50 @@ class VerdictTests(unittest.TestCase):
             },
         )
         request = assessment()
-        request["expected_model_roles"][policy.AXES.index("risk")]["caller_policy"] = {
+        index = role_index(request, "quality")
+        request["expected_model_roles"][index]["caller_policy"] = {
             "model": "opus",
             "mandatory": True,
         }
-        request["review_protocol"]["roles"][policy.AXES.index("risk")] = role
-        result = policy.execute("verdict", request)
+        request["review_protocol"]["roles"][index] = role
+        result = policy.execute("judgment", request)
         self.assertEqual("complete", result["assessment_status"])
-        self.assertEqual("Invest", result["verdict"])
+        self.assertEqual("yes", result["decision"])
         self.assertEqual([], result["model_policy_gaps"])
 
     def test_no_model_requirement_does_not_create_a_coverage_gap(self):
         prepared = policy.execute(
-            "model_preflight", {"role": "risk", "dispatch_path": "inline"}
+            "model_preflight", {"role": "quality", "dispatch_path": "inline"}
         )
         role = policy.execute(
             "model_observation", {"preflight": prepared, "actual_model": "unknown"}
         )
         request = assessment()
-        request["review_protocol"]["roles"][policy.AXES.index("risk")] = role
-        result = policy.execute("verdict", request)
+        request["review_protocol"]["roles"][role_index(request, "quality")] = role
+        result = policy.execute("judgment", request)
         self.assertEqual("complete", result["assessment_status"])
-        self.assertEqual("Invest", result["verdict"])
+        self.assertEqual("yes", result["decision"])
         self.assertEqual([], result["model_policy_gaps"])
-
-    def test_shared_assumption_is_not_independent_corroboration(self):
-        result = policy.execute(
-            "verdict", assessment([finding(), finding(id="F-2", issue_id="I-2")])
-        )
-        self.assertEqual("insufficient_evidence", result["assessment_status"])
-        self.assertIsNone(result["verdict"])
-        self.assertEqual({"A-1": ["I-1", "I-2"]}, result["shared_critical_assumptions"])
 
     def test_independence_explanation_preserves_shared_assumption_ids(self):
         proof = {
             "A-1": {
                 "issue_ids": ["I-1", "I-2"],
                 "reason": "Separate causal mechanisms remain failing when the other is fixed; synthetic evidence.",
-                "sources": FIXTURE["evidence"]["sources"],
+                "sources": SOURCES,
             }
         }
+        pair = [finding(), finding(id="F-2", issue_id="I-2")]
         result = policy.execute(
-            "verdict",
-            assessment(
-                [finding(), finding(id="F-2", issue_id="I-2")],
-                independence_evidence=proof,
-            ),
+            "judgment", assessment(pair, independence_evidence=proof)
         )
-        self.assertEqual("Skip", result["verdict"])
+        self.assertEqual("complete", result["assessment_status"])
+        self.assertEqual("no", result["decision"])
         self.assertEqual(proof, result["independence_evidence"])
         self.assertEqual({"A-1": ["I-1", "I-2"]}, result["shared_critical_assumptions"])
         proof["A-1"]["issue_ids"] = ["I-1"]
-        with self.assertRaises(policy.PolicyError):
-            policy.execute(
-                "verdict",
-                assessment(
-                    [finding(), finding(id="F-2", issue_id="I-2")],
-                    independence_evidence=proof,
-                ),
-            )
+        with self.assertRaisesRegex(policy.PolicyError, "exactly the affected issue ids"):
+            policy.execute("judgment", assessment(pair, independence_evidence=proof))
 
     def test_unsourced_independence_cannot_unlock_multiple_criticals(self):
         proof = {
@@ -498,80 +589,29 @@ class VerdictTests(unittest.TestCase):
                 "sources": [],
             }
         }
-        with self.assertRaises(policy.PolicyError):
+        with self.assertRaisesRegex(policy.PolicyError, "require cited evidence"):
             policy.execute(
-                "verdict",
+                "judgment",
                 assessment(
                     [finding(), finding(id="F-2", issue_id="I-2")],
                     independence_evidence=proof,
                 ),
             )
 
-    def test_fixture_decision_table(self):
-        for case in FIXTURE["verdict_cases"]:
-            with self.subTest(case=case["name"]):
-                request = assessment([finding(**f) for f in case["findings"]])
-                request["coverage"].update(case.get("coverage", {}))
-                request["decision_evidence"]["sufficient"] = case.get(
-                    "sufficient", True
-                )
-                if case.get("assets"):
-                    request["reusable_assets"] = [
-                        {
-                            "description": "Synthetic capability",
-                            "sources": deepcopy(FIXTURE["evidence"]["sources"]),
-                        }
-                    ]
-                output = policy.execute("verdict", request)
-                self.assertEqual(case["status"], output["assessment_status"])
-                self.assertEqual(case["verdict"], output["verdict"])
-                self.assertEqual(output["verdict"], output["mechanical_verdict"])
-
-    def test_override_separate_audit_without_streak_cap(self):
-        override = {
-            "verdict": "Proceed with caution",
-            "reason": "Reserve lowers confidence.",
-            "sources": deepcopy(FIXTURE["evidence"]["sources"]),
-        }
-        for _ in range(3):
-            output = policy.execute("verdict", assessment(override=override))
-            self.assertEqual("Invest", output["mechanical_verdict"])
-            self.assertEqual(override, output["override"])
-
-    def test_override_cannot_bypass_axis_or_invest_evidence(self):
-        override = {
-            "verdict": "Invest",
-            "reason": "Invalid shortcut.",
-            "sources": FIXTURE["evidence"]["sources"],
-        }
-        request = assessment(override=override)
-        request["coverage"]["feasibility"] = "failed"
-        with self.assertRaises(policy.PolicyError):
-            policy.execute("verdict", request)
-        with self.assertRaises(policy.PolicyError):
-            policy.execute(
-                "verdict",
-                assessment(
-                    [finding()],
-                    decision_evidence={"sufficient": False},
-                    override=override,
-                ),
-            )
-
     def test_claim_removal_cannot_close_risk(self):
-        with self.assertRaises(policy.PolicyError):
+        with self.assertRaisesRegex(policy.PolicyError, "cannot mark the finding resolved"):
             policy.execute(
-                "verdict",
+                "judgment",
                 assessment([finding(status="resolved", resolution="claim_removed")]),
             )
 
     def test_refutation_recomputes_without_approval(self):
-        before = policy.execute("verdict", assessment([finding()]))
+        before = policy.execute("judgment", assessment([finding()]))
         after = policy.execute(
-            "verdict", assessment([finding(status="refuted", doc_support="refuted")])
+            "judgment", assessment([finding(status="refuted", doc_support="refuted")])
         )
-        self.assertEqual("Proceed with caution", before["verdict"])
-        self.assertEqual("Invest", after["verdict"])
+        self.assertEqual("no", before["decision"])
+        self.assertEqual("yes", after["decision"])
         self.assertEqual(["F-1"], after["excluded_ids"])
 
     def test_sourced_user_report_is_conditional_not_external_verification(self):
@@ -582,12 +622,12 @@ class VerdictTests(unittest.TestCase):
                 {
                     "type": "user",
                     "ref": "reply:4",
-                    "quote": "My available budget is 100; costs are 160.",
+                    "quote": "The venue only allows four minutes; the track runs six.",
                 }
             ],
         )
-        output = policy.execute("verdict", assessment([f]))
-        self.assertEqual("Proceed with caution", output["verdict"])
+        output = policy.execute("judgment", assessment([f]))
+        self.assertEqual("no", output["decision"])
         self.assertEqual(["I-1"], output["user_report_dependencies"])
         self.assertTrue(
             any("not independently verified" in reason for reason in output["reasons"])
@@ -595,10 +635,142 @@ class VerdictTests(unittest.TestCase):
         self.assertEqual("not_checked", f["external_status"])
 
 
+class FindingSchemaTests(unittest.TestCase):
+    def test_generated_lens_in_axes_requires_lens_list(self):
+        f = finding(axes=["arrangement"], lens="arrangement")
+        with self.assertRaisesRegex(policy.PolicyError, "unknown axis"):
+            policy.validate_finding(f)
+        lenses = ("fit", "feasibility", "quality", "arrangement")
+        self.assertEqual(
+            ["arrangement"], policy.validate_finding(f, lenses=lenses)["axes"]
+        )
+
+    def test_business_only_fields_are_rejected(self):
+        for key in ("thesis_breaking", "plausibly_resolvable"):
+            with self.subTest(key=key), self.assertRaisesRegex(
+                policy.PolicyError, "no longer accepted"
+            ):
+                policy.validate_finding(finding(**{key: True}))
+
+    def test_lens_must_be_in_axes_and_requirement_id_in_brief(self):
+        with self.assertRaisesRegex(policy.PolicyError, "finding.lens must be in axes"):
+            policy.validate_finding(finding(lens="feasibility"))
+        with self.assertRaisesRegex(policy.PolicyError, "unknown requirement_id"):
+            policy.execute(
+                "normalize",
+                {"findings": [finding(requirement_id="R9")], "requirement_ids": ["R1"]},
+            )
+
+    def test_decisive_finding_needs_requirement_or_feasibility(self):
+        f = finding(axes=["quality"], lens="quality", affects_decision=True)
+        del f["requirement_id"]
+        with self.assertRaisesRegex(policy.PolicyError, "affects_decision requires"):
+            policy.execute("normalize", {"findings": [f], "requirement_ids": ["R1"]})
+
+    def test_merge_is_order_independent_and_idempotent(self):
+        a = finding(id="a", lens="fit", axes=["fit"], requirement_id="R1")
+        b = finding(
+            id="b", lens="feasibility", axes=["feasibility"], requirement_id="R1"
+        )
+        ab = policy.execute("normalize", {"findings": [a, b], "requirement_ids": ["R1"]})
+        ba = policy.execute("normalize", {"findings": [b, a], "requirement_ids": ["R1"]})
+        self.assertEqual(ab["findings"], ba["findings"])
+        merged = ab["findings"][0]
+        self.assertEqual(["feasibility", "fit"], merged["axes"])
+        self.assertEqual(["feasibility", "fit"], merged["origin_lenses"])
+        self.assertEqual("feasibility", merged["lens"])
+        again = policy.execute(
+            "normalize", {"findings": ab["findings"], "requirement_ids": ["R1"]}
+        )
+        self.assertEqual(ab["findings"], again["findings"])
+
+    def test_requirement_id_conflict_is_reported_not_picked(self):
+        a, b = finding(id="a", requirement_id="R1"), finding(id="b", requirement_id="R2")
+        result = policy.execute(
+            "normalize", {"findings": [a, b], "requirement_ids": ["R1", "R2"]}
+        )
+        self.assertEqual("requirement_id", result["conflicts"][0]["field"])
+
+    def test_categories_are_routine_scope_approach(self):
+        self.assertEqual(("routine", "scope", "approach"), policy.CATEGORIES)
+        with self.assertRaisesRegex(policy.PolicyError, "invalid change category"):
+            policy.change_id({"change": {"category": "pricing", "description": "x"}})
+
+    def test_markdown_input_is_rejected(self):
+        with self.assertRaisesRegex(policy.PolicyError, "structured findings only"):
+            policy.execute("normalize", {"markdown": "## Findings\n- x"})
+
+
+def lens(lens_id, origin="generated", **changes):
+    return {
+        "id": lens_id,
+        "examine": f"How the entry handles {lens_id}",
+        "evidence": "Named passages in the entry",
+        "out_of_scope": "",
+        "origin": origin,
+        **changes,
+    }
+
+
+class LensCheckTests(unittest.TestCase):
+    BRIEF = "Goal: a two-minute demo. R1 runs offline. Standard: last year's winners."
+
+    def check(self, lenses, text=BRIEF):
+        return policy.execute("lens_check", {"lenses": lenses, "requirement_text": text})
+
+    def test_generated_lens_ids_cannot_collide_with_fixed_or_reserved(self):
+        for bad in ("fit", "quality", "verifier", "tiebreak-1", "fact-checker-x", "derive2", "X", "a", "a_b"):
+            with self.subTest(lens_id=bad):
+                result = self.check([lens(bad)])
+                self.assertEqual([], result["lenses"])
+                self.assertEqual([bad], [r["id"] for r in result["rejected"]])
+        result = self.check([lens("story-arc"), lens("story-arc", "user_edited")])
+        self.assertEqual(["story-arc"], [l["id"] for l in result["lenses"]])
+        self.assertRegex(result["rejected"][0]["reason"], "unique")
+
+    def test_cap_counts_generated_and_user_edited(self):
+        lenses = [lens("a1"), lens("b2", "user_edited"), lens("c3"), lens("d4", "user_edited")]
+        result = self.check(lenses)
+        self.assertEqual(["a1", "b2", "c3"], [l["id"] for l in result["lenses"]])
+        self.assertEqual("d4", result["rejected"][0]["id"])
+        self.assertRegex(result["rejected"][0]["reason"], "three")
+
+    def test_business_terms_use_word_boundaries(self):
+        heroic = lens("tone", examine="Heroic framing of the pitch")
+        roi = lens("payoff", examine="ROI the user can expect")
+        sales = lens("pitch", evidence="Sales passages in the entry")
+        self.assertEqual(["tone"], [l["id"] for l in self.check([heroic])["lenses"]])
+        self.assertEqual(["payoff"], [r["id"] for r in self.check([roi])["rejected"]])
+        self.assertEqual(["pitch"], [r["id"] for r in self.check([sales])["rejected"]])
+        self.assertEqual(["pitch"], [l["id"] for l in self.check([sales], "R1 covers sales training")["lenses"]])
+        self.assertEqual(["roi"], [l["id"] for l in self.check([lens("roi", examine="Stories about Roi")])["lenses"]])
+
+    def test_rejected_lenses_are_returned_not_dropped(self):
+        request = {
+            "lenses": [lens("good"), lens("bad", examine=" "), lens("long", evidence="x" * 601), lens("fixed-one", "fixed")],
+            "requirement_text": self.BRIEF,
+        }
+        before = deepcopy(request)
+        result = policy.execute("lens_check", request)
+        self.assertEqual(before, request)
+        self.assertEqual([request["lenses"][0]], result["lenses"])
+        self.assertEqual(["bad", "long", "fixed-one"], [r["id"] for r in result["rejected"]])
+        for rejected in result["rejected"]:
+            self.assertTrue(rejected["reason"])
+        with self.assertRaisesRegex(policy.PolicyError, "must be an object"):
+            self.check(["good"])
+
+
 class NormalizationTests(unittest.TestCase):
     def test_causal_deduplication_keeps_members(self):
         result = policy.execute(
-            "normalize", {"findings": [finding(), finding(id="F-2", axes=["roi"])]}
+            "normalize",
+            {
+                "findings": [
+                    finding(),
+                    finding(id="F-2", axes=["feasibility"], lens="feasibility"),
+                ]
+            },
         )
         self.assertEqual([], result["conflicts"])
         self.assertEqual(1, len(result["findings"]))
@@ -615,7 +787,13 @@ class NormalizationTests(unittest.TestCase):
             "I-1": {
                 "severity": "High",
                 "reason": "Blocking but not fatal.",
-                "sources": FIXTURE["evidence"]["sources"],
+                "sources": [
+                    {
+                        "type": "document",
+                        "ref": "fixture.md:L2",
+                        "quote": "The prototype fits the stated allocation.",
+                    }
+                ],
             }
         }
         output = policy.execute("normalize", request)
@@ -634,58 +812,6 @@ class NormalizationTests(unittest.TestCase):
         self.assertEqual(
             ["defer", "accept"], [d["decision"] for d in output["decisions"]]
         )
-
-    def test_legacy_heading_levels_and_no_triple_count(self):
-        for heading in ("##", "###", "####"):
-            with self.subTest(heading=heading):
-                markdown = "\n".join(
-                    [
-                        "# Stress test",
-                        "## Reviewer A",
-                        "- **[Critical]** Raw claim.",
-                        "## Synthesis",
-                        heading + " Consensus findings (two reviewers)",
-                        "- **[High]** `[verified]` Final issue.",
-                        heading + " Unique to Reviewer B",
-                        "- **[Medium]** Unrated issue.",
-                        "## Iteration recommendations for v2",
-                        "- **[High]** Final issue.",
-                    ]
-                )
-                output = policy.execute("normalize", {"markdown": markdown})
-                self.assertEqual("stress-test-idea", output["format"])
-                self.assertEqual(
-                    ["Final issue.", "Unrated issue."],
-                    [f["statement"] for f in output["findings"]],
-                )
-                self.assertTrue(output["requires_source_review"])
-                self.assertTrue(
-                    all(not policy.established(f) for f in output["findings"])
-                )
-
-    def test_verdict_table_over_raw_axes(self):
-        markdown = "## Critical thinking\n- **[High]** Repeated issue.\n## Issue multiplicity table\n| Issue | Severity | Axes |\n| --- | --- | --- |\n| One actual issue | High | ROI |\n## Verdict: Proceed with caution\n- **[High]** Repeated issue."
-        output = policy.execute("normalize", {"markdown": markdown})
-        self.assertEqual(
-            ["One actual issue"], [f["statement"] for f in output["findings"]]
-        )
-
-    def test_unknown_markdown_never_autoaccepts(self):
-        imported = policy.execute(
-            "normalize",
-            {
-                "markdown": "- Review numbers\n- **[Critical]** [verified] Demand exists."
-            },
-        )
-        output = policy.execute("acceptance", {"findings": imported["findings"]})
-        self.assertEqual(
-            ["defer", "defer"], [d["decision"] for d in output["decisions"]]
-        )
-
-    def test_fenced_fake_synthesis_is_ignored(self):
-        markdown = "```md\n## Synthesis\n### Consensus findings\n- **[Critical]** fake\n```\n## Synthesis\n### Consensus findings\n- **[High]** actual"
-        output = policy.execute("normalize", {"markdown": markdown})
-        self.assertEqual(["actual"], [f["statement"] for f in output["findings"]])
 
     def test_invalid_source_types_rejected(self):
         with self.assertRaises(policy.PolicyError):
@@ -752,7 +878,7 @@ class AcceptanceTests(unittest.TestCase):
 
 class GateTests(unittest.TestCase):
     def test_routine_proceeds_while_material_waits(self):
-        routine, material = change(), change("target_customer", "Serve clinics")
+        routine, material = change(), change("scope", "Cut the second deliverable")
         output = policy.execute("gate", {"changes": [routine, material]})
         self.assertEqual([routine["id"]], output["ready"])
         self.assertEqual(["material_choice"], output["pending_questions"][0]["reason"])
@@ -765,8 +891,8 @@ class GateTests(unittest.TestCase):
 
     def test_bound_answer_reused_but_changed_remedy_not_approved(self):
         old, new = (
-            change("pricing", "Price 30 dollars monthly"),
-            change("pricing", "Price 300 dollars monthly"),
+            change("approach", "Record live instead of sequencing"),
+            change("approach", "Record live with one overdub"),
         )
         decision = {
             "id": "D1",
@@ -838,254 +964,138 @@ class GateTests(unittest.TestCase):
 
 
 class RoutingTests(unittest.TestCase):
+    BASE = {"has_document": True, "has_brief": True}
+
     def test_fixture_routes(self):
         for case in FIXTURE["route_cases"]:
             with self.subTest(case=case["name"]):
-                self.assertEqual(
-                    case["action"], policy.execute("route", case["request"])["action"]
-                )
+                if "error" in case:
+                    with self.assertRaisesRegex(policy.PolicyError, case["error"]):
+                        policy.execute("route", case["request"])
+                    continue
+                result = policy.execute("route", case["request"])
+                self.assertEqual(case["action"], result["action"])
+                if "rewritable" in case:
+                    self.assertEqual(case["rewritable"], result["rewritable"])
 
-    def test_loop_flags_propagate_only_to_applicable_stage(self):
-        flags = ["--loop", "--verify-claims", "--accept-all"]
-        output = policy.execute(
-            "route",
-            {"flags": flags, "state": {"has_document": True, "has_critique": True}},
+    def test_interim_stop_texts_are_exact(self):
+        brief = policy.execute("route", {"state": {"has_document": True}})
+        self.assertEqual(policy.INTERIM_BRIEF_STOP, brief["reason"])
+        rank = policy.execute(
+            "route", {"state": dict(self.BASE, entry_slugs=["a", "b"])}
         )
-        self.assertEqual(["--accept-all"], output["pass_flags"])
-        self.assertEqual(sorted(flags), output["loop_flags"])
+        self.assertEqual("Ranking arrives in 4.1.0.", rank["reason"])
+
+    def test_revision_flags_with_several_entries_are_rejected(self):
+        for flag in ("--loop", "--rewrite", "--accept-all", "--accept-none"):
+            with self.subTest(flag=flag), self.assertRaisesRegex(
+                policy.PolicyError, "rank mode judges only"
+            ):
+                policy.execute(
+                    "route",
+                    {"flags": [flag], "state": dict(self.BASE, entry_slugs=["a", "b"])},
+                )
+        accepted = policy.execute(
+            "route",
+            {"flags": ["--critique-only"], "state": dict(self.BASE, entry_slugs=["a", "b"])},
+        )
+        self.assertEqual("stop", accepted["action"])
+
+    def test_entry_cap_from_thresholds(self):
+        cap = policy.THRESHOLDS["rank_max_entries"]
+        self.assertEqual(12, cap)
+        slugs = [f"e{n}" for n in range(cap + 1)]
+        with self.assertRaisesRegex(policy.PolicyError, f"at most {cap} entries"):
+            policy.execute("route", {"state": dict(self.BASE, entry_slugs=slugs)})
+
+    def test_input_flags_bypass_the_allowlist(self):
+        result = policy.execute(
+            "route",
+            {"flags": ["--brief", "--slug plan", "--entries"], "state": self.BASE},
+        )
+        self.assertEqual("judge", result["action"])
+        self.assertEqual([], result["pass_flags"])
+
+    def test_stored_judgment_never_rejudges_without_intent(self):
+        for decision in ("yes", "not_yet", "no", "cannot_judge"):
+            for flags in ([], ["--loop"]):
+                with self.subTest(decision=decision, flags=flags):
+                    result = policy.execute(
+                        "route",
+                        {
+                            "flags": flags,
+                            "state": dict(
+                                self.BASE,
+                                has_judgment=True,
+                                assessment_status="complete",
+                                decision=decision,
+                                can_revise=False,
+                                rewritable={"value": True, "decided_by": "default"},
+                            ),
+                        },
+                    )
+                    self.assertNotEqual("judge", result["action"])
+
+    def test_flags_override_default_rewritable_but_not_user(self):
+        state = dict(self.BASE, has_judgment=True, assessment_status="complete", decision="no")
+        for decided_by, action in (("default", "critique_complete"), ("rank", "critique_complete"), ("user", "ask_user")):
+            with self.subTest(decided_by=decided_by):
+                result = policy.execute(
+                    "route",
+                    {
+                        "flags": ["--critique-only"],
+                        "state": dict(state, rewritable={"value": True, "decided_by": decided_by}),
+                    },
+                )
+                self.assertEqual(action, result["action"])
+
+    def test_loop_flags_propagate_only_to_judge_and_revise(self):
+        judge = policy.execute(
+            "route",
+            {"flags": ["--loop", "--verify-claims", "--accept-all"], "state": self.BASE},
+        )
+        self.assertEqual("judge", judge["action"])
+        self.assertEqual(["--verify-claims"], judge["pass_flags"])
+        self.assertEqual(["--accept-all", "--loop", "--verify-claims"], judge["loop_flags"])
+        revise = policy.execute(
+            "route",
+            {
+                "flags": ["--loop", "--verify-claims", "--accept-all"],
+                "state": dict(
+                    self.BASE,
+                    has_judgment=True,
+                    assessment_status="complete",
+                    decision="not_yet",
+                    can_revise=True,
+                    rewritable={"value": True, "decided_by": "default"},
+                ),
+            },
+        )
+        self.assertEqual("revise", revise["action"])
+        self.assertEqual(["--accept-all"], revise["pass_flags"])
+        with self.assertRaisesRegex(policy.PolicyError, "incompatible"):
+            policy.execute("route", {"flags": ["--accept-all"], "state": self.BASE})
 
     def test_invalid_flags_and_state_fail(self):
-        requests = [
-            {"flags": ["--status", "--loop"]},
-            {"flags": ["--reset", "--status"]},
-            {"flags": ["--accept-none", "--accept-all"]},
-            {"flags": ["--unknown"]},
-            {
-                "intent": "stress_test",
-                "flags": ["--accept-all"],
-                "state": {"has_document": True},
-            },
-            {
-                "intent": "evaluate",
-                "flags": ["--validate"],
-                "state": {"has_document": True},
-            },
-            {"intent": "evaluate", "flags": ["--status"]},
-            {"state": {"current_version": True}},
-            {"state": {"has_document": "true"}},
-            {"state": {"current_version": "v2"}},
-            {"state": {"stage": "waiting_for_user_rewrite"}},
-        ]
-        for request in requests:
-            with self.subTest(request=request), self.assertRaises(policy.PolicyError):
+        for request, message in (
+            ({"flags": ["--unknown"]}, "unknown flag"),
+            ({"flags": ["--loop", "--loop"]}, "duplicate flag"),
+            ({"flags": ["--accept-all", "--accept-none"]}, "conflict"),
+            ({"flags": ["--status", "--loop"]}, "cannot combine"),
+            ({"flags": ["--status", "--reset"]}, "cannot combine"),
+            ({"intent": "strategy"}, "unknown intent"),
+            ({"state": {"stage": "evaluation"}}, "invalid stage"),
+            ({"state": {"decision": "Invest"}}, "invalid state decision"),
+            ({"state": {"rewritable": {"value": True, "decided_by": "agent"}}}, "decided_by"),
+            ({"inputs": [{"type": "verdict", "ref": "x"}]}, "input type"),
+        ):
+            with self.subTest(request=request), self.assertRaisesRegex(
+                policy.PolicyError, message
+            ):
                 policy.execute("route", request)
 
 
-class IntegrationTests(unittest.TestCase):
-    def test_agent_written_revision_is_evaluated_and_preserves_history(self):
-        state_spec = importlib.util.spec_from_file_location(
-            "integration_state", ROOT / "skills/_shared/state.py"
-        )
-        ledger = importlib.util.module_from_spec(state_spec)
-        state_spec.loader.exec_module(ledger)
-        with tempfile.TemporaryDirectory() as directory:
-            source = Path(directory) / "idea.md"
-            original = "# Synthetic idea\nBudget cap 100; required costs 80 + 80.\n"
-            source.write_text(original)
-            base = {"slug": "integration", "source": str(source)}
-            initialized = ledger.execute("init", base)
-            root = Path(initialized["root"])
-            findings = policy.execute("normalize", {"findings": [finding()]})[
-                "findings"
-            ]
-            reviewed = ledger.execute(
-                "report",
-                {
-                    **base,
-                    "version": "v1",
-                    "kind": "stress_test",
-                    "text": "Synthetic findings\n" + json.dumps(findings),
-                    "result": {
-                        "findings": findings,
-                        "assessment_status": "incomplete_coverage",
-                        "expected_model_roles": [],
-                        "review_protocol": {"roles": []},
-                    },
-                },
-            )
-            prior_report = reviewed["state"]["reports"][-1]
-            prior_bytes = (root / prior_report["path"]).read_bytes()
-
-            routine = change(description="State the arithmetic total as 160")
-            material = change(
-                "scope", "Drop the second component, leaving one 80-cost component"
-            )
-            first_gate = policy.execute("gate", {"changes": [routine, material]})
-            self.assertEqual([routine["id"]], first_gate["ready"])
-            # This is the user's decision fixture; the user supplies no rewritten text.
-            decision = {
-                "id": "D1",
-                "change_id": material["id"],
-                "choice": "Drop the second component",
-                "approved": True,
-                "source": "user",
-            }
-            accepted = policy.execute(
-                "gate", {"changes": [routine, material], "decisions": [decision]}
-            )
-            self.assertEqual(2, len(accepted["ready"]))
-            updated = ledger.execute(
-                "update",
-                {
-                    **base,
-                    "expected_generation": reviewed["state"]["generation"],
-                    "patch": {"decisions": [decision], "findings": findings},
-                },
-            )
-            generated = "# Synthetic idea v2\nBudget cap 100; retain one component costing 80.\nThe second component is outside this scope, as chosen by the user.\n"
-            revised = ledger.execute(
-                "snapshot",
-                {
-                    **base,
-                    "version": "v2",
-                    "parent_version": "v1",
-                    "text": generated,
-                    "expected_generation": updated["state"]["generation"],
-                },
-            )
-            self.assertEqual(
-                generated,
-                (root / revised["state"]["versions"]["v2"]["path"]).read_text(),
-            )
-            revision = ledger.execute(
-                "report",
-                {
-                    **base,
-                    "version": "v2",
-                    "kind": "revision",
-                    "text": "Agent wrote v2 using decision D1; resource mismatch resolved by scope change.",
-                    "input_report_ids": [prior_report["id"]],
-                    "result": {"decision_ids": ["D1"]},
-                },
-            )
-
-            def projection(stored):
-                version = stored["current_version"]
-                current = [
-                    report
-                    for report in stored["reports"]
-                    if report["version"] == version
-                ]
-                evaluations = [
-                    report for report in current if report["kind"] == "evaluation"
-                ]
-                result = evaluations[-1]["result"] if evaluations else {}
-                return {
-                    "current_version": int(version[1:]),
-                    "has_document": version in stored["versions"],
-                    "has_critique": any(
-                        report["kind"] == "stress_test" for report in current
-                    ),
-                    "has_verdict": bool(evaluations),
-                    "stage": current[-1]["kind"] if current else "snapshot",
-                    **{
-                        key: result[key]
-                        for key in ("assessment_status", "verdict")
-                        if key in result
-                    },
-                }
-
-            next_route = policy.execute(
-                "route", {"flags": ["--loop"], "state": projection(revision["state"])}
-            )
-            self.assertEqual("evaluate-proposal-harsh", next_route["action"])
-            self.assertEqual(2, next_route["current_version"])
-            resolved = finding(
-                status="resolved",
-                resolution="scope_changed",
-                sources=[
-                    {
-                        "type": "document",
-                        "ref": "versions/v2.md:L2",
-                        "quote": "Budget cap 100; retain one component costing 80.",
-                    }
-                ],
-            )
-            result = policy.execute("verdict", assessment([resolved]))
-            self.assertEqual("Invest", result["verdict"])
-            evaluated = ledger.execute(
-                "report",
-                {
-                    **base,
-                    "version": "v2",
-                    "kind": "evaluation",
-                    "input_sha256": revision["state"]["versions"]["v2"]["sha256"],
-                    "text": "Synthetic bounded assessment\n" + json.dumps(result),
-                    "result": {**result, "findings": [resolved]},
-                    "input_report_ids": [revision["state"]["reports"][-1]["id"]],
-                },
-            )
-            resumed = policy.execute(
-                "route", {"flags": ["--loop"], "state": projection(evaluated["state"])}
-            )
-            self.assertEqual("stop", resumed["action"])
-            self.assertEqual(original, source.read_text())
-            self.assertEqual(original, (root / "versions/v1.md").read_text())
-            self.assertEqual(prior_bytes, (root / prior_report["path"]).read_bytes())
-            self.assertEqual(3, len(evaluated["state"]["reports"]))
-            self.assertEqual([decision], evaluated["state"]["decisions"])
-
-
 class PriorityAndCLITests(unittest.TestCase):
-    def test_worked_example_hashes_and_output_contracts(self):
-        cases = [
-            (
-                "consumer-app-pitch/v2-verdict.md",
-                "v2.md",
-                "complete",
-                "Proceed with caution",
-            ),
-            ("b2b-saas-pivot/v1-verdict.md", "v1.md", "complete", "Pivot"),
-            (
-                "unsupported-tam-skip/v1-verdict.md",
-                "v1.md",
-                "insufficient_evidence",
-                "null",
-            ),
-        ]
-        for relative, source_name, status, verdict in cases:
-            with self.subTest(example=relative):
-                report = ROOT / "examples" / relative
-                content = report.read_text(encoding="utf-8")
-                source_hash = hashlib.sha256(
-                    (report.parent / source_name).read_bytes()
-                ).hexdigest()
-                self.assertIn(f"SHA-256: `{source_hash}`", content)
-                self.assertIn(f"`assessment_status={status}`", content)
-                self.assertIn(f"`mechanical_verdict={verdict}`", content)
-                self.assertIn(f"`verdict={verdict}`", content)
-                self.assertIn("Synthetic illustrative output", content)
-                self.assertIn("Report ID:", content)
-
-    def test_worked_example_economics_match_the_fixture_text(self):
-        consumer = (ROOT / "examples/consumer-app-pitch/v2.md").read_text(
-            encoding="utf-8"
-        )
-        b2b = (ROOT / "examples/b2b-saas-pivot/v1-verdict.md").read_text(
-            encoding="utf-8"
-        )
-        annual_revenue = 8 * 12
-        self.assertAlmostEqual(512, annual_revenue * 0.8 / 0.15)
-        self.assertAlmostEqual(640, annual_revenue / 0.15)
-        self.assertIn("15% annual churn", consumer)
-        self.assertIn("$96 × 80% / 15% = $512", consumer)
-        self.assertIn("$96 / 15% = $640", consumer)
-        self.assertIn("not measured LTV estimates", consumer)
-        self.assertEqual(2880, 8 * 30 * 12)
-        self.assertEqual(34560, 12 * 8 * 30 * 12)
-        self.assertIn("`$2,880`", b2b)
-        self.assertIn("`$34,560`", b2b)
-
     def test_critical_precedes_five_medium_mentions(self):
         findings = [
             finding(id=f"M-{i}", issue_id="medium-cause", severity="Medium")
@@ -1093,17 +1103,6 @@ class PriorityAndCLITests(unittest.TestCase):
         ] + [finding()]
         output = policy.execute("prioritize", {"findings": findings})
         self.assertEqual(["I-1", "medium-cause"], output["ordered_issue_ids"])
-
-    def test_fixture_arithmetic(self):
-        arr, churn = FIXTURE["arithmetic_cases"]
-        self.assertEqual(arr["expected_arr"], arr["seats"] * arr["monthly_price"] * 12)
-        self.assertEqual(
-            churn["expected_revenue_ltv"],
-            churn["monthly_revenue"] / churn["monthly_churn"],
-        )
-        self.assertAlmostEqual(
-            churn["expected_annual_churn"], 1 - (1 - churn["monthly_churn"]) ** 12
-        )
 
     def test_cli_stdin_and_file_aliases(self):
         cli = ROOT / "skills/_shared/policy.py"
@@ -1139,7 +1138,7 @@ class PriorityAndCLITests(unittest.TestCase):
     def test_pure_operations_do_not_mutate_input(self):
         request = assessment([finding()])
         before = deepcopy(request)
-        policy.execute("verdict", request)
+        policy.execute("judgment", request)
         self.assertEqual(before, request)
 
 

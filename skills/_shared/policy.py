@@ -16,17 +16,37 @@ import sys
 from pathlib import Path
 
 
-AXES = ("critical_thinking", "feasibility", "risk", "roi")
-VERDICTS = ("Invest", "Proceed with caution", "Pivot", "Skip")
-CATEGORIES = (
-    "routine",
-    "target_customer",
-    "pricing",
-    "business_model",
-    "core_thesis",
-    "scope",
-    "experiment",
+FIXED_LENSES = ("fit", "feasibility", "quality")
+RESERVED_PREFIXES = ("verifier", "derive", "tiebreak", "fact-checker")
+LENS_ID = re.compile(r"[a-z][a-z0-9-]{1,31}\Z")
+MAX_LENS_TEXT = 600
+MAX_GENERATED_LENSES = 3
+BUSINESS_TERMS = (re.compile(r"\bROI\b"),) + tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        r"\bmarket(s|ing)?\b",
+        r"\bpric(e|es|ing)\b",
+        r"\brevenue\b",
+        r"\bmoneti[sz](e|ation)\b",
+        r"\bprofit(s|able|ability)?\b",
+        r"\bcustomer acquisition\b",
+        r"\bbusiness value\b",
+        r"\bsales\b",
+        r"\bwillingness to pay\b",
+    )
 )
+LABELS = {
+    "fit": ("meets", "partly_meets", "does_not_meet", "cannot_judge"),
+    "feasibility": (
+        "achievable",
+        "achievable_with_changes",
+        "not_achievable",
+        "cannot_judge",
+    ),
+    "quality": ("strong", "adequate", "weak", "cannot_judge"),
+    "decision": ("yes", "not_yet", "no", "cannot_judge"),
+}
+CATEGORIES = ("routine", "scope", "approach")
 ENUMS = {
     "kind": ("contradiction", "missing_evidence", "risk", "question"),
     "severity": ("Critical", "High", "Medium"),
@@ -99,25 +119,31 @@ def sources(value, label="sources"):
     return value
 
 
-def validate_finding(value):
+def validate_finding(value, lenses=FIXED_LENSES):
     """Validate a normalized finding; never upgrade a legacy provenance tag."""
     f = deepcopy(obj(value, "finding"))
+    for key in ("thesis_breaking", "plausibly_resolvable"):
+        require(key not in f, f"finding.{key} is no longer accepted")
     for key in ("id", "issue_id", "statement", "severity_reason"):
         nonempty(f.get(key), f"finding.{key}")
     for key, values in ENUMS.items():
         require(f.get(key) in values, f"finding.{key} must be one of {values}")
-    for key in ("affects_decision", "thesis_breaking"):
-        boolean(f.get(key), f"finding.{key}")
-    require(
-        f.get("plausibly_resolvable") is None
-        or type(f["plausibly_resolvable"]) is bool,
-        "finding.plausibly_resolvable must be boolean or null",
-    )
+    boolean(f.get("affects_decision"), "finding.affects_decision")
     for key in ("axes", "assumption_ids"):
         for item in sequence(f.get(key), f"finding.{key}"):
             nonempty(item, f"finding.{key} entry")
         require(len(set(f[key])) == len(f[key]), f"finding.{key} contains duplicates")
-    require(set(f["axes"]) <= set(AXES), "finding.axes contains an unknown axis")
+    require(set(f["axes"]) <= set(lenses), "finding.axes contains an unknown axis")
+    nonempty(f.get("lens"), "finding.lens")
+    require(f["lens"] in f["axes"], "finding.lens must be in axes")
+    if "origin_lenses" in f:
+        origin = sequence(f["origin_lenses"], "finding.origin_lenses")
+        require(
+            bool(origin) and origin == sorted(set(origin)) and set(origin) <= set(f["axes"]),
+            "finding.origin_lenses must be a sorted list of lenses in axes",
+        )
+    if "requirement_id" in f:
+        nonempty(f["requirement_id"], "finding.requirement_id")
     sources(f.get("sources"))
     if "member_ids" in f:
         for member in sequence(f["member_ids"], "finding.member_ids"):
@@ -171,177 +197,80 @@ def unique(items):
     return result
 
 
-def markdown_candidates(markdown):
-    """Import final synthesis only. Imported claims require source verification.
+def _lens_rejection(lens, seen, accepted, requirement_text):
+    lens_id = lens["id"]
+    if not LENS_ID.match(lens_id):
+        return "lens id must match [a-z][a-z0-9-]{1,31}"
+    if lens_id in FIXED_LENSES:
+        return "lens id collides with a fixed lens"
+    if lens_id.startswith(RESERVED_PREFIXES):
+        return "lens id starts with a reserved role prefix"
+    if lens_id in seen:
+        return "lens id must be unique"
+    if lens.get("origin") not in ("generated", "user_edited"):
+        return "lens origin must be generated or user_edited"
+    for field in ("examine", "evidence"):
+        text = lens.get(field)
+        if not isinstance(text, str) or not text.strip():
+            return f"lens {field} must be a nonempty string"
+        if len(text) > MAX_LENS_TEXT:
+            return f"lens {field} exceeds {MAX_LENS_TEXT} characters"
+    if not isinstance(lens.get("out_of_scope"), str):
+        return "lens out_of_scope must be a string"
+    for pattern in BUSINESS_TERMS:
+        if (pattern.search(lens["examine"]) or pattern.search(lens["evidence"])) and not pattern.search(
+            requirement_text
+        ):
+            return f"lens uses a business term the brief does not: {pattern.pattern}"
+    if len(accepted) >= MAX_GENERATED_LENSES:
+        return "at most three generated or user-edited lenses"
+    return None
 
-    This is a conservative compatibility reader, not semantic interpretation.
-    JSON findings are the authoritative format for new reports.
-    """
-    nonempty(markdown, "markdown")
-    rows = []
-    fenced = False
-    for number, line in enumerate(markdown.splitlines(), 1):
-        if re.match(r"^\s*(```|~~~)", line):
-            fenced = not fenced
-            continue
-        if not fenced:
-            heading = re.match(r"^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$", line)
-            rows.append(
-                (
-                    number,
-                    line,
-                    (len(heading[1]), heading[2].lower()) if heading else None,
-                )
-            )
-    canonical = [
-        i
-        for i, (_, _, h) in enumerate(rows)
-        if h and h[1].startswith("normalized findings")
-    ]
-    synthesis = [i for i, (_, _, h) in enumerate(rows) if h and h[1] == "synthesis"]
-    table = [
-        i
-        for i, (_, _, h) in enumerate(rows)
-        if h and h[1].startswith("issue multiplicity table")
-    ]
-    anchors = canonical or synthesis or table
-    if anchors:
-        start = anchors[-1]
-        level = rows[start][2][0]
-        end = next(
-            (
-                i
-                for i in range(start + 1, len(rows))
-                if rows[i][2] and rows[i][2][0] <= level
-            ),
-            len(rows),
-        )
-        if synthesis and not canonical:
-            end = next(
-                (
-                    i
-                    for i in range(start + 1, len(rows))
-                    if rows[i][2]
-                    and rows[i][2][1].startswith(
-                        (
-                            "iteration recommendations",
-                            "next step",
-                            "verdict:",
-                            "reviewer ",
-                        )
-                    )
-                ),
-                len(rows),
-            )
-        selected = rows[start + 1 : end]
-        fmt = (
-            "normalized"
-            if canonical
-            else "stress-test-idea"
-            if synthesis
-            else "evaluate-proposal-harsh"
-        )
-    else:
-        selected, fmt = rows, "unknown"
-    result, bucket = (
-        [],
-        "verdict" if table and not canonical and not synthesis else "unknown",
-    )
-    for number, line, heading in selected:
-        if heading:
-            name = heading[1]
-            if name.startswith("consensus findings"):
-                bucket = "consensus"
-            elif name.startswith("unique"):
-                bucket = (
-                    "unique_reach"
-                    if "likely reach" in name
-                    else "unique_real"
-                    if "(real)" in name
-                    else "unique_unrated"
-                )
-            elif name.startswith(("what none caught", "what neither caught")):
-                bucket = "speculative"
-            else:
-                bucket = "unknown"
-            continue
-        if fmt == "stress-test-idea" and bucket == "unknown":
-            continue  # verification, contradictions and recommendations are not final finding rows
-        match = re.match(
-            r"^\s*[-*]\s+(?:\*\*)?\[(Critical|High|Medium)\](?:\*\*)?\s*(.*)",
-            line,
-            re.I,
-        )
-        if match:
-            severity, statement = match[1].title(), match[2].strip()
-        elif fmt == "evaluate-proposal-harsh" and line.strip().startswith("|"):
-            cells = [c.strip() for c in line.strip().strip("|").split("|")]
-            if len(cells) < 2 or cells[1] not in ENUMS["severity"]:
-                continue
-            statement, severity = cells[:2]
-        elif fmt == "unknown" and re.match(r"^\s*[-*]\s+\S", line):
-            severity, statement = "Medium", re.sub(r"^\s*[-*]\s+", "", line)
+
+def lens_check(request):
+    """Validate non-fixed lenses; rejections are returned with reasons, never dropped."""
+    requirement_text = nonempty(request.get("requirement_text"), "requirement_text")
+    accepted, rejected, seen = [], [], set()
+    for lens in sequence(request.get("lenses"), "lenses"):
+        obj(lens, "lens")
+        lens_id = nonempty(lens.get("id"), "lens.id")
+        reason = _lens_rejection(lens, seen, accepted, requirement_text)
+        seen.add(lens_id)
+        if reason:
+            rejected.append({"id": lens_id, "reason": reason})
         else:
-            continue
-        statement = re.sub(
-            r"`?\[(?:verified|doc-claim|reviewer-inference)\]`?\s*", "", statement
-        ).strip()
-        if not statement:
-            continue
-        digest = hashlib.sha256(statement.casefold().encode()).hexdigest()[:16]
-        result.append(
-            {
-                "id": "import-" + digest,
-                "issue_id": "import-" + digest,
-                "assumption_ids": [],
-                "statement": statement,
-                "kind": "question",
-                "severity": severity,
-                "severity_reason": "Imported severity; requires normalization against source and decision context.",
-                "origin": "reviewer",
-                "doc_support": "not_established",
-                "external_status": "not_checked",
-                "confidence": "low",
-                "sources": [
-                    {
-                        "type": "critique",
-                        "ref": f"critique:L{number}",
-                        "quote": line.strip(),
-                    }
-                ],
-                "axes": [],
-                "affects_decision": True,
-                "status": "active",
-                "resolution": "unresolved",
-                "bucket": bucket,
-                "evidence_basis": "external_fact",
-                "thesis_breaking": False,
-                "plausibly_resolvable": None,
-            }
-        )
-    return fmt, result
+            accepted.append(deepcopy(lens))
+    return {"lenses": accepted, "rejected": rejected}
 
 
 def normalize(request):
     require(
-        ("findings" in request) != ("markdown" in request),
-        "supply findings or markdown, not both",
+        "markdown" not in request and "findings" in request,
+        "normalize accepts structured findings only",
     )
-    fmt, raw = (
-        ("structured", request["findings"])
-        if "findings" in request
-        else markdown_candidates(request["markdown"])
-    )
+    lenses = tuple(sequence(request.get("lenses", list(FIXED_LENSES)), "lenses"))
+    requirement_ids = request.get("requirement_ids")
+    if requirement_ids is not None:
+        requirement_ids = set(sequence(requirement_ids, "requirement_ids"))
     resolutions = obj(request.get("severity_resolutions", {}), "severity_resolutions")
     groups, seen_ids = {}, {}
-    for value in sequence(raw, "findings"):
-        f = validate_finding(value)
+    for value in sequence(request["findings"], "findings"):
+        f = validate_finding(value, lenses)
+        if requirement_ids is not None and "requirement_id" in f:
+            require(
+                f["requirement_id"] in requirement_ids,
+                f"unknown requirement_id {f['requirement_id']}",
+            )
+        require(
+            not f["affects_decision"]
+            or "requirement_id" in f
+            or "feasibility" in f["axes"],
+            "affects_decision requires a requirement_id or the feasibility axis",
+        )
         if f["id"] in seen_ids:
-            previous = seen_ids[f["id"]]
-            if fmt != "structured":
-                previous["sources"] = unique(previous["sources"] + f["sources"])
-                continue
-            require(previous == f, f"conflicting records for finding id {f['id']}")
+            require(
+                seen_ids[f["id"]] == f, f"conflicting records for finding id {f['id']}"
+            )
             continue
         seen_ids[f["id"]] = f
         groups.setdefault(f["issue_id"], []).append(f)
@@ -349,13 +278,34 @@ def normalize(request):
         set(resolutions) <= set(groups), "severity resolution names an unknown issue"
     )
     merged, conflicts = [], []
-    for issue_id, members in groups.items():
+    for issue_id in sorted(groups):
+        # Sorting makes the merge independent of dispatch order.
+        members = sorted(groups[issue_id], key=lambda m: m["id"])
         f = deepcopy(members[0])
         f["member_ids"] = unique(
             [member for m in members for member in m.get("member_ids", [m["id"]])]
         )
-        for key in ("axes", "assumption_ids", "sources"):
+        for key in ("assumption_ids", "sources"):
             f[key] = unique([item for m in members for item in m[key]])
+        f["axes"] = sorted({item for m in members for item in m["axes"]})
+        f["origin_lenses"] = sorted(
+            {lens for m in members for lens in m.get("origin_lenses", [m["lens"]])}
+        )
+        f["lens"] = f["origin_lenses"][0]
+        requirement_ids_seen = sorted(
+            {m["requirement_id"] for m in members if "requirement_id" in m}
+        )
+        f.pop("requirement_id", None)
+        if len(requirement_ids_seen) == 1:
+            f["requirement_id"] = requirement_ids_seen[0]
+        elif requirement_ids_seen:
+            conflicts.append(
+                {
+                    "issue_id": issue_id,
+                    "field": "requirement_id",
+                    "values": requirement_ids_seen,
+                }
+            )
         severities = sorted({m["severity"] for m in members})
         if issue_id in resolutions:
             choice = obj(resolutions[issue_id], "severity resolution")
@@ -380,8 +330,6 @@ def normalize(request):
             "external_status",
             "status",
             "affects_decision",
-            "thesis_breaking",
-            "plausibly_resolvable",
         ):
             values = unique([m[key] for m in members])
             if len(values) > 1:
@@ -392,54 +340,75 @@ def normalize(request):
         )
         merged.append(f)
     return {
-        "format": fmt,
+        "format": "structured",
         "findings": merged,
         "conflicts": conflicts,
-        "requires_source_review": fmt != "structured",
+        "requires_source_review": False,
     }
 
 
-def verdict(request):
+RECORD_STATUSES = ("met", "partly_met", "not_met", "cannot_tell")
+
+
+def decide(fit, feasibility):
+    if "cannot_judge" in (fit, feasibility):
+        return "cannot_judge"
+    if fit == "does_not_meet" or feasibility == "not_achievable":
+        return "no"
+    if fit == "partly_meets" or feasibility == "achievable_with_changes":
+        return "not_yet"
+    return "yes"
+
+
+def judgment(request):
+    lenses = list(sequence(request.get("lenses"), "lenses"))
+    require(
+        set(FIXED_LENSES) <= set(lenses) and len(set(lenses)) == len(lenses),
+        "lenses must include fit, feasibility and quality exactly once",
+    )
+    for lens in lenses:
+        require(isinstance(lens, str) and LENS_ID.match(lens), f"invalid lens id {lens}")
+    requirement_ids = list(sequence(request.get("requirement_ids"), "requirement_ids"))
+    for requirement_id in requirement_ids:
+        nonempty(requirement_id, "requirement id")
+    require(len(set(requirement_ids)) == len(requirement_ids), "duplicate requirement id")
     normalized = normalize(
         {
             "findings": request.get("findings"),
             "severity_resolutions": request.get("severity_resolutions", {}),
+            "lenses": lenses,
+            "requirement_ids": requirement_ids,
         }
     )
     coverage = obj(request.get("coverage"), "coverage")
-    require(set(coverage) == set(AXES), "coverage must include exactly all four axes")
+    require(set(coverage) == set(lenses), "coverage must name exactly the active lenses")
     require(
-        all(
-            v in ("complete", "partial", "not_run", "failed") for v in coverage.values()
-        ),
+        all(v in ("complete", "partial", "not_run", "failed") for v in coverage.values()),
         "invalid coverage status",
     )
-    review_protocol = request.get("review_protocol")
-    required_roles = set(AXES)
-    if verifier_required(normalized["findings"]):
-        required_roles.add("verifier")
-    model_coverage = review_model_coverage(
-        request.get("expected_model_roles"),
-        review_protocol,
-        required_roles=required_roles,
+    records = sequence(request.get("requirement_records"), "requirement_records")
+    for record in records:
+        obj(record, "requirement record")
+        nonempty(record.get("requirement_id"), "requirement record.requirement_id")
+        require(record.get("status") in RECORD_STATUSES, "invalid requirement record status")
+        nonempty(record.get("evidence_location"), "requirement record.evidence_location")
+        for item in sequence(record.get("finding_ids"), "requirement record.finding_ids"):
+            nonempty(item, "requirement record finding id")
+    record_ids = [record["requirement_id"] for record in records]
+    require(
+        len(set(record_ids)) == len(record_ids) and set(record_ids) == set(requirement_ids),
+        "requirement_records must cover each brief requirement exactly once",
     )
-    model_gaps = model_coverage["model_policy_gaps"]
-    review_role_gaps = model_coverage["review_role_gaps"]
-    evidence = obj(request.get("decision_evidence", {}), "decision_evidence")
-    sufficient = boolean(
-        evidence.get("sufficient", False), "decision_evidence.sufficient"
-    )
-    if sufficient:
-        nonempty(evidence.get("rationale"), "decision_evidence.rationale")
-        require(
-            bool(sources(evidence.get("sources"))),
-            "sufficient decision evidence needs sources",
-        )
-    assets = sequence(request.get("reusable_assets", []), "reusable_assets")
-    for asset in assets:
-        obj(asset, "asset")
-        nonempty(asset.get("description"), "asset.description")
-        require(bool(sources(asset.get("sources"))), "reusable asset needs sources")
+    feasibility_label = request.get("feasibility_label")
+    require(feasibility_label in LABELS["feasibility"], "invalid feasibility_label")
+    quality_label = request.get("quality_label")
+    require(quality_label in LABELS["quality"], "invalid quality_label")
+    brief = obj(request.get("brief"), "brief")
+    nonempty(brief.get("sha256"), "brief.sha256")
+    boolean(brief.get("constraints_stated"), "brief.constraints_stated")
+    boolean(brief.get("standard_stated"), "brief.standard_stated")
+    nonempty(request.get("lens_set_sha256"), "lens_set_sha256")
+
     findings = normalized["findings"]
     active = [f for f in findings if not excluded(f)]
     decisive = [f for f in active if f["affects_decision"]]
@@ -448,30 +417,28 @@ def verdict(request):
         for f in decisive
         if f["kind"] in ("missing_evidence", "question") or not established(f)
     ]
-    criticals = [
+    solid = [
         f
         for f in decisive
-        if f["severity"] == "Critical"
-        and established(f)
-        and f["kind"] not in ("missing_evidence", "question")
+        if established(f) and f["kind"] not in ("missing_evidence", "question")
     ]
-    highs = [
-        f
-        for f in decisive
-        if f["severity"] == "High"
-        and established(f)
-        and f["kind"] not in ("missing_evidence", "question")
-    ]
+    criticals = [f for f in solid if f["severity"] == "Critical"]
+    highs = [f for f in solid if f["severity"] == "High"]
+    cited_ok = {
+        m
+        for f in active
+        if established(f) and f["kind"] not in ("missing_evidence", "question")
+        for m in f["member_ids"]
+    }
+
     assumption_issues = {}
-    for finding in criticals:
-        for assumption_id in finding["assumption_ids"]:
-            assumption_issues.setdefault(assumption_id, []).append(finding["issue_id"])
+    for f in criticals:
+        for assumption_id in f["assumption_ids"]:
+            assumption_issues.setdefault(assumption_id, []).append(f["issue_id"])
     shared_assumptions = {
         key: issues for key, issues in assumption_issues.items() if len(issues) > 1
     }
-    independence = obj(
-        request.get("independence_evidence", {}), "independence_evidence"
-    )
+    independence = obj(request.get("independence_evidence", {}), "independence_evidence")
     require(
         set(independence) <= set(shared_assumptions),
         "independence evidence names an unknown shared assumption",
@@ -479,9 +446,7 @@ def verdict(request):
     for assumption_id, explanation in independence.items():
         obj(explanation, "independence explanation")
         nonempty(explanation.get("reason"), "independence explanation.reason")
-        cited_ids = sequence(
-            explanation.get("issue_ids"), "independence explanation.issue_ids"
-        )
+        cited_ids = sequence(explanation.get("issue_ids"), "independence explanation.issue_ids")
         require(
             all(isinstance(item, str) for item in cited_ids)
             and sorted(cited_ids) == sorted(shared_assumptions[assumption_id]),
@@ -492,14 +457,100 @@ def verdict(request):
             "independent failure mechanisms require cited evidence",
         )
     unresolved_dependence = sorted(set(shared_assumptions) - set(independence))
+
+    reasons = []
+    requirement_results = {}
+    for record in records:
+        requirement_id = record["requirement_id"]
+        status = record["status"]
+        if status in ("not_met", "partly_met") and not set(record["finding_ids"]) & cited_ok:
+            status = "cannot_tell"
+            reasons.append(
+                f"{requirement_id}: a {record['status']} record cites no established finding, so it counts as cannot_tell."
+            )
+        forced_by = sorted(
+            f["id"] for f in criticals if f.get("requirement_id") == requirement_id
+        )
+        if forced_by:
+            status = "not_met"
+        requirement_results[requirement_id] = {
+            "status": status,
+            "evidence_location": record["evidence_location"],
+            "forced_by": forced_by,
+            "cited": list(record["finding_ids"]),
+        }
+    statuses = {r["status"] for r in requirement_results.values()}
+    fit_vacuous = not requirement_ids
+    if fit_vacuous:
+        fit = "meets"
+        reasons.append("The brief states no requirements, so fit is vacuous.")
+    elif "not_met" in statuses:
+        fit = "does_not_meet"
+    elif "cannot_tell" in statuses:
+        fit = "cannot_judge"
+    elif "partly_met" in statuses:
+        fit = "partly_meets"
+    else:
+        fit = "meets"
+
+    feasibility = feasibility_label
+    if any("feasibility" in f["axes"] for f in criticals):
+        feasibility = "not_achievable"
+    elif feasibility == "achievable" and any("feasibility" in f["axes"] for f in highs):
+        feasibility = "achievable_with_changes"
+    quality = quality_label
+    decision = decide(fit, feasibility)
+
+    required_roles = set(lenses)
+    if decision != "cannot_judge" or verifier_required(findings):
+        required_roles.add("verifier")
+    review_protocol = request.get("review_protocol")
+    model_coverage = review_model_coverage(
+        request.get("expected_model_roles"), review_protocol, required_roles=required_roles
+    )
+    model_gaps = model_coverage["model_policy_gaps"]
+    review_role_gaps = model_coverage["review_role_gaps"]
+
+    status = "complete"
+    if model_gaps or review_role_gaps:
+        status = "incomplete_coverage"
+        if model_gaps:
+            reasons.append("Mandatory model policy was not confirmed for: " + ", ".join(model_gaps))
+        if review_role_gaps:
+            reasons.append(
+                "Expected review roles were not observed with their declared policies: "
+                + ", ".join(review_role_gaps)
+            )
+    elif any(value != "complete" for value in coverage.values()):
+        status = "incomplete_coverage"
+        reasons.append("Every active lens must complete before a judgment.")
+    elif normalized["conflicts"] or gaps:
+        status = "insufficient_evidence"
+        reasons.append("Resolve conflicting findings or decision-relevant evidence gaps.")
+    elif unresolved_dependence:
+        status = "insufficient_evidence"
+        reasons.append(
+            "Critical findings share a causal assumption. Consolidate the underlying issue or document independent evidence."
+        )
+    if status != "complete":
+        fit = feasibility = quality = decision = "cannot_judge"
+
+    mechanical = {"fit": fit, "feasibility": feasibility, "quality": quality, "decision": decision}
     result = {
-        "schema_version": 2,
-        "assessment_status": "complete",
-        "mechanical_verdict": None,
-        "verdict": None,
-        "reasons": [],
+        "schema_version": 3,
+        "assessment_status": status,
+        "fit": fit,
+        "fit_vacuous": fit_vacuous,
+        "feasibility": feasibility,
+        "feasibility_provisional": not brief["constraints_stated"],
+        "quality": quality,
+        "quality_provisional": not brief["standard_stated"],
+        "decision": decision,
+        "mechanical": deepcopy(mechanical),
+        "reasons": reasons,
+        "requirement_results": requirement_results,
         "critical_issue_ids": [f["issue_id"] for f in criticals],
-        "blocking_high_issue_ids": [f["issue_id"] for f in highs],
+        "high_issue_ids": [f["issue_id"] for f in highs],
         "evidence_gaps": gaps,
         "excluded_ids": [m for f in findings if excluded(f) for m in f["member_ids"]],
         "conflicts": normalized["conflicts"],
@@ -511,124 +562,45 @@ def verdict(request):
         "model_policy_gaps": model_gaps,
         "review_role_gaps": review_role_gaps,
         "findings": deepcopy(findings),
+        "lenses": lenses,
+        "brief_sha256": brief["sha256"],
+        "lens_set_sha256": request["lens_set_sha256"],
         "expected_model_roles": deepcopy(request.get("expected_model_roles") or []),
     }
     if review_protocol is not None:
         result["review_protocol"] = deepcopy(review_protocol)
-    if model_gaps or review_role_gaps:
-        reasons = []
-        if model_gaps:
-            reasons.append(
-                "Mandatory model policy was not confirmed for: " + ", ".join(model_gaps)
-            )
-        if review_role_gaps:
-            reasons.append(
-                "Expected review roles were not observed with their declared policies: "
-                + ", ".join(review_role_gaps)
-            )
-        result.update(
-            assessment_status="incomplete_coverage",
-            reasons=reasons,
-        )
-    elif any(value != "complete" for value in coverage.values()):
-        result.update(
-            assessment_status="incomplete_coverage",
-            reasons=[
-                "All four current review axes must complete before a business verdict."
-            ],
-        )
-    elif normalized["conflicts"] or gaps:
-        result.update(
-            assessment_status="insufficient_evidence",
-            reasons=[
-                "Resolve conflicting findings or decision-relevant evidence gaps."
-            ],
-        )
-    elif unresolved_dependence:
-        result.update(
-            assessment_status="insufficient_evidence",
-            reasons=[
-                "Critical findings share a causal assumption. Consolidate the underlying issue or document independent evidence before counting separate blockers."
-            ],
-        )
-    elif any(f["plausibly_resolvable"] is None for f in criticals):
-        result.update(
-            assessment_status="insufficient_evidence",
-            reasons=[
-                "Classify each Critical's resolvability against current resources."
-            ],
-        )
-    elif len(criticals) >= 2:
-        result.update(
-            mechanical_verdict="Skip",
-            reasons=["Multiple independent established Critical issues remain."],
-        )
-    elif len(criticals) == 1:
-        critical = criticals[0]
-        feasibility_clean = not any(
-            "feasibility" in f["axes"] and f["severity"] in ("Critical", "High")
-            for f in active
-        )
-        if critical["thesis_breaking"] and assets and feasibility_clean:
-            result.update(
-                mechanical_verdict="Pivot",
-                reasons=[
-                    "One established thesis-breaking issue; documented reusable assets and complete clean feasibility."
-                ],
-            )
-        elif not critical["thesis_breaking"] and critical["plausibly_resolvable"]:
-            result.update(
-                mechanical_verdict="Proceed with caution",
-                reasons=[
-                    "One established non-thesis Critical is plausibly resolvable."
-                ],
-            )
-        else:
-            result.update(
-                mechanical_verdict="Skip",
-                reasons=[
-                    "The established Critical has no supported continuation or asset-backed pivot under current constraints."
-                ],
-            )
-    elif highs:
-        result.update(
-            mechanical_verdict="Proceed with caution",
-            reasons=["Established blocking High findings remain."],
-        )
-    elif sufficient:
-        result.update(
-            mechanical_verdict="Invest",
-            reasons=[
-                "No established blocking issue remains and decision evidence is explicitly sufficient."
-            ],
-        )
-    else:
-        result.update(
-            assessment_status="insufficient_evidence",
-            reasons=["An empty issue list is not sufficient evidence to invest."],
-        )
-    result["verdict"] = result["mechanical_verdict"]
     result["user_report_dependencies"] = [
         f["issue_id"] for f in decisive if f["evidence_basis"] == "user_report"
     ]
     if result["user_report_dependencies"]:
-        result["reasons"].append(
-            "Assessment is conditional on the cited user reports; these were not independently verified."
+        reasons.append(
+            "Judgment is conditional on the cited user reports; these were not independently verified."
         )
     if "override" in request:
         override = obj(request["override"], "override")
         require(
-            result["assessment_status"] == "complete",
+            status == "complete" and "cannot_judge" not in mechanical.values(),
             "override cannot bypass evidence or coverage gates",
         )
-        require(override.get("verdict") in VERDICTS, "invalid override verdict")
+        labels = obj(override.get("labels"), "override.labels")
         require(
-            override["verdict"] != "Invest" or sufficient,
-            "An Invest override requires explicit sufficient decision evidence with rationale and sources",
+            bool(labels) and set(labels) <= {"fit", "feasibility", "quality"},
+            "override.labels names fit, feasibility or quality",
         )
+        for key, value in labels.items():
+            require(value in LABELS[key], f"invalid override label for {key}")
+            require(value != "cannot_judge", "override cannot set a label to cannot_judge")
         nonempty(override.get("reason"), "override.reason")
         require(bool(sources(override.get("sources"))), "override needs evidence")
-        result.update(verdict=override["verdict"], override=deepcopy(override))
+        improves = any(
+            LABELS[key].index(value) < LABELS[key].index(mechanical[key])
+            for key, value in labels.items()
+        )
+        if improves:
+            nonempty(override.get("decision_id"), "override.decision_id")
+        result.update(labels)
+        result["decision"] = decide(result["fit"], result["feasibility"])
+        result["override"] = deepcopy(override)
     return result
 
 
@@ -810,89 +782,105 @@ def gate(request):
     return result
 
 
+THRESHOLDS = json.loads(Path(__file__).with_name("thresholds.json").read_text())
+ACTION_FLAGS = {
+    "--critique-only",
+    "--rewrite",
+    "--loop",
+    "--verify-claims",
+    "--accept-all",
+    "--accept-none",
+}
+INPUT_FLAGS = {"--brief", "--entries", "--examples", "--slug"}
+ADMIN_FLAGS = {"--status", "--reset"}
+SKILL_FLAGS = {
+    "brief": {"--examples"},
+    "judge": {"--verify-claims", "--critique-only", "--rewrite"},
+    "revise": {"--accept-all", "--accept-none"},
+    "rank": {"--verify-claims", "--critique-only"},
+}
+INTERIM_BRIEF_STOP = (
+    "Supply the brief with --brief PATH. "
+    "The interview and example-derived briefs arrive in 4.2.0."
+)
+INTERIM_RANK_STOP = "Ranking arrives in 4.1.0."
+
+
 def flag_set(flags):
-    flags = sequence(flags, "flags")
-    known = {
-        "--loop",
-        "--verify-claims",
-        "--validate",
-        "--accept-all",
-        "--accept-none",
-        "--status",
-        "--reset",
-    }
+    """Flag tokens only: '--slug name' and '--slug=name' both become '--slug'."""
+    tokens = [
+        re.split(r"[ =]", flag, maxsplit=1)[0] if isinstance(flag, str) else flag
+        for flag in sequence(flags, "flags")
+    ]
+    known = ACTION_FLAGS | INPUT_FLAGS | ADMIN_FLAGS
+    require(all(isinstance(t, str) and t in known for t in tokens), "unknown flag")
+    require(len(set(tokens)) == len(tokens), "duplicate flag")
+    tokens = set(tokens)
     require(
-        all(isinstance(flag, str) and flag in known for flag in flags), "unknown flag"
-    )
-    require(len(set(flags)) == len(flags), "duplicate flag")
-    flags = set(flags)
-    require(
-        not {"--accept-all", "--accept-none"} <= flags,
+        not {"--accept-all", "--accept-none"} <= tokens,
         "--accept-all and --accept-none conflict",
     )
     require(
-        not ({"--status", "--reset"} & flags and len(flags) > 1),
+        not (tokens & ADMIN_FLAGS and (tokens & ACTION_FLAGS or ADMIN_FLAGS <= tokens)),
         "--status/--reset cannot combine with action flags",
     )
-    return flags
+    return tokens
 
 
 def route(request):
     intent = request.get("intent", "auto")
     require(
         intent
-        in (
-            "auto",
-            "stress_test",
-            "revise",
-            "evaluate",
-            "strategy",
-            "status",
-            "reset",
-            "stop",
-        ),
+        in ("auto", "brief", "judge", "revise", "rank", "status", "reset", "stop"),
         "unknown intent",
     )
     flags = flag_set(request.get("flags", []))
     state = obj(request.get("state", {}), "state")
     version = state.get("current_version", 1)
     require(
-        type(version) is int and version >= 1,
-        "current_version must be a positive integer",
+        version is None or (type(version) is int and version >= 1),
+        "current_version must be a positive integer or null",
     )
-    stage = state.get("stage", "snapshot")
     require(
-        stage in ("snapshot", "stress_test", "revision", "evaluation", "strategy"),
+        state.get("stage", "snapshot") in ("snapshot", "judgment", "revision", "ranking"),
         "invalid stage",
     )
-    for field in ("has_document", "has_critique", "has_verdict", "can_revise"):
+    for field in ("has_document", "has_brief", "has_judgment", "can_revise"):
         if field in state:
             boolean(state[field], field)
-    for field in ("pending_questions", "pending_experiments"):
+    for field in ("pending_questions", "evidence_gaps", "entry_slugs"):
         if field in state:
             sequence(state[field], field)
-    if "verdict" in state:
-        require(
-            state["verdict"] is None or state["verdict"] in VERDICTS,
-            "invalid state verdict",
-        )
+    require(
+        state.get("decision") is None or state["decision"] in LABELS["decision"],
+        "invalid state decision",
+    )
     if "assessment_status" in state:
         require(
             state["assessment_status"]
             in ("complete", "insufficient_evidence", "incomplete_coverage"),
             "invalid assessment_status",
         )
+    rewritable = state.get("rewritable")
+    if rewritable is not None:
+        obj(rewritable, "rewritable")
+        boolean(rewritable.get("value"), "rewritable.value")
+        require(
+            rewritable.get("decided_by") in ("default", "flag", "user", "rank"),
+            "invalid rewritable.decided_by",
+        )
     inputs = sequence(request.get("inputs", []), "inputs")
     types = []
     for item in inputs:
         obj(item, "input")
         require(
-            item.get("type") in ("document", "critique", "verdict"),
+            item.get("type") in ("document", "brief", "examples", "judgment"),
             "input type must be explicit",
         )
         nonempty(item.get("ref"), "input.ref")
         types.append(item["type"])
-    if "--status" in flags or "--reset" in flags:
+
+    if flags & ADMIN_FLAGS:
         selected = "status" if "--status" in flags else "reset"
         require(
             intent in ("auto", selected),
@@ -901,7 +889,7 @@ def route(request):
         intent = selected
     if intent in ("status", "reset", "stop"):
         require(
-            flags <= {"--status", "--reset"},
+            not flags & ACTION_FLAGS,
             "administrative/stop intent cannot combine with action flags",
         )
         return {
@@ -910,163 +898,112 @@ def route(request):
             ],
             "reason": "Explicit user intent.",
             "pass_flags": [],
+            "loop_flags": [],
+            "current_version": version,
+            "rewritable": None,
         }
-    require(
-        "--validate" not in flags
-        or intent == "strategy"
-        or intent == "auto"
-        and ("verdict" in types or state.get("has_verdict", False)),
-        "--validate requires strategy intent or a supplied/stored assessment",
-    )
-    if (
-        types.count("document") > 1
-        or types.count("critique") > 1
-        or types.count("verdict") > 1
-    ):
-        return {
-            "action": "ask_input_roles",
-            "reason": "Select the current document and authoritative critique/verdict explicitly.",
-            "pass_flags": [],
-        }
-    has_doc = "document" in types or state.get("has_document", False)
-    has_critique = "critique" in types or state.get("has_critique", False)
-    has_verdict = "verdict" in types or state.get("has_verdict", False)
-    if intent == "auto" and "--validate" in flags and has_verdict:
-        intent = "strategy"
+
     loop = "--loop" in flags
+    new_rewritable = None
 
     def answer(action, reason):
-        allowed = {
-            "stress-test-idea": {"--verify-claims"},
-            "evaluate-proposal-harsh": {"--verify-claims"},
-            "iterate-to-v2": {"--accept-all", "--accept-none"},
-            "strategize-from-verdict": {"--validate"},
-        }.get(action, set())
-        action_flags = flags - {"--loop"}
-        # Loop flags remain on router state for later review/revision stages.
+        allowed = SKILL_FLAGS.get(action, set())
+        checked = flags & ACTION_FLAGS - {"--loop", "--critique-only", "--rewrite"}
         require(
-            loop
-            or action
-            not in (
-                "stress-test-idea",
-                "evaluate-proposal-harsh",
-                "iterate-to-v2",
-                "strategize-from-verdict",
-            )
-            or action_flags <= allowed,
+            loop or action not in SKILL_FLAGS or checked <= allowed,
             "flag is incompatible with the selected skill",
         )
         return {
             "action": action,
             "reason": reason,
-            "pass_flags": sorted(action_flags & allowed),
-            "loop_flags": sorted(flags) if loop else [],
+            "pass_flags": sorted(flags & ACTION_FLAGS & allowed),
+            "loop_flags": sorted(flags & ACTION_FLAGS) if loop else [],
             "current_version": version,
+            "rewritable": new_rewritable,
         }
 
-    def revise():
-        if state.get("pending_questions"):
-            return answer(
-                "ask_user",
-                "Resolve pending choices or missing facts; the agent writes the revision.",
-            )
-        if state.get("pending_experiments"):
-            return answer(
-                "await_evidence",
-                "A required experiment cannot be replaced by rewritten prose.",
-            )
-        if version >= 3:
-            return answer(
-                "version_limit",
-                "Three total versions reached; retain findings and choose a new scoped task explicitly.",
-            )
+    if any(types.count(kind) > 1 for kind in set(types)):
         return answer(
-            "iterate-to-v2" if has_critique or has_verdict else "stress-test-idea",
-            "Generate the next revision from normalized findings."
-            if has_critique or has_verdict
-            else "Generate findings before revision.",
+            "ask_input_roles", "Select one input of each kind explicitly."
         )
-
-    if (
-        not has_doc
-        and intent != "strategy"
-        and not (intent == "auto" and "verdict" in types)
-    ):
-        return answer(
-            "ask_document", "Provide idea material or a slug with an existing snapshot."
+    require(
+        not {"--critique-only", "--rewrite"} <= flags,
+        "--critique-only and --rewrite conflict",
+    )
+    slugs = list(state.get("entry_slugs", []))
+    duplicates = sorted({slug for slug in slugs if slugs.count(slug) > 1})
+    if state.get("brief_slug") in slugs:
+        duplicates.append(state["brief_slug"])
+    require(
+        not duplicates,
+        "entry slugs must be unique and differ from the brief ledger: "
+        + ", ".join(duplicates),
+    )
+    if len(slugs) > 1:
+        require(
+            not flags & {"--loop", "--rewrite", "--accept-all", "--accept-none"},
+            "rank mode judges only; it never revises",
         )
-    if intent == "stress_test":
-        return answer(
-            "stress-test-idea",
-            "Explicit re-test takes precedence over stored verdicts.",
-        )
-    if intent == "evaluate":
-        return answer(
-            "evaluate-proposal-harsh",
-            "Explicit evaluation takes precedence over stored stage.",
-        )
-    if intent == "strategy":
-        return answer(
-            "strategize-from-verdict"
-            if has_verdict
-            else "evaluate-proposal-harsh"
-            if has_doc
-            else "ask_document",
-            "Strategy requires an assessment and its findings.",
-        )
-    if intent == "revise":
-        return revise()
-    if "verdict" in types:
-        return answer(
-            "strategize-from-verdict",
-            "Typed verdict input selects strategy; path count does not determine intent.",
-        )
+    cap = THRESHOLDS["rank_max_entries"]
+    require(len(slugs) <= cap, f"at most {cap} entries can be ranked in one run")
+    require("--examples" not in flags, "--examples arrives in 4.2.0")
+    if intent == "brief":
+        return answer("brief", "Explicit brief intent.")
+    if not state.get("has_brief", False):
+        if "--brief" in flags:
+            return answer("brief", "Read and store the supplied brief first.")
+        return answer("stop", INTERIM_BRIEF_STOP)
+    if intent == "rank" or len(slugs) > 1:
+        return answer("stop", INTERIM_RANK_STOP)
+    if not state.get("has_document", False):
+        return answer("ask_document", "Provide the entry or a slug with a snapshot.")
+    flag_value = (
+        False if "--critique-only" in flags else True if "--rewrite" in flags else None
+    )
+    if flag_value is not None:
+        if rewritable is not None and rewritable["decided_by"] == "user":
+            if rewritable["value"] != flag_value:
+                return answer(
+                    "ask_user",
+                    "The flag contradicts your earlier choice about rewriting this entry.",
+                )
+        elif rewritable is None or rewritable["value"] != flag_value or rewritable[
+            "decided_by"
+        ] in ("default", "rank"):
+            new_rewritable = {"value": flag_value, "decided_by": "flag"}
+            rewritable = new_rewritable
     if state.get("pending_questions"):
-        return answer(
-            "ask_user",
-            "Pending consequential choices or missing facts require user input.",
-        )
-    if state.get("pending_experiments"):
-        return answer(
-            "await_evidence",
-            "Pending empirical evidence stops automatic text iteration.",
-        )
-    if stage == "revision" and not has_verdict:
-        return answer(
-            "evaluate-proposal-harsh", "Evaluate the generated current revision."
-        )
-    if stage == "strategy" and state.get("can_revise", False):
-        return revise()
-    if has_verdict:
-        if state.get("assessment_status") == "incomplete_coverage":
-            return answer(
-                "stop",
-                "Restore missing review coverage before explicitly reevaluating.",
-            )
-        if state.get("assessment_status") == "insufficient_evidence":
-            return answer(
-                "await_evidence",
-                "Resolve the assessment's evidence gaps before another automatic pass.",
-            )
-        if (
-            state.get("verdict") in ("Proceed with caution", "Pivot", "Skip")
-            and loop
-            and state.get("can_revise", False)
-        ):
-            return revise()
-        return answer(
-            "stop",
-            "Assessment completed; strategy or another review requires explicit intent.",
-        )
-    if has_critique:
-        return revise()
-    if loop or state.get("has_document", False):
-        return answer(
-            "stress-test-idea", "Start or resume the review from its snapshot."
-        )
+        return answer("ask_user", "Pending choices or missing facts need your input.")
+    if intent == "judge":
+        return answer("judge", "Explicit judge intent.")
+    rewritable_false = rewritable is not None and rewritable["value"] is False
+    has_judgment = state.get("has_judgment", False)
+    if intent == "revise":
+        if not has_judgment:
+            return answer("judge", "Judge the current version before revising it.")
+        if rewritable_false:
+            return answer("critique_complete", "This entry is not rewritten; the improvement record is the output.")
+        if version is not None and version >= THRESHOLDS["max_versions"]:
+            return answer("version_limit", "The version cap is reached; start a new slug to continue.")
+        return answer("revise", "Explicit revise intent.")
+    if not has_judgment:
+        return answer("judge", "No judgment exists for the current version.")
+    gaps = ", ".join(state.get("evidence_gaps", [])) or "unspecified"
+    if state.get("assessment_status") == "incomplete_coverage":
+        return answer("stop", f"Review coverage is incomplete: {gaps}. Restore it, then judge again explicitly.")
+    if state.get("assessment_status") == "insufficient_evidence":
+        return answer("stop", f"Evidence gaps remain: {gaps}. Resolve them, then judge again explicitly.")
+    if state.get("decision") == "cannot_judge":
+        return answer("stop", f"Cannot judge yet. Supply what is missing to continue: {gaps}.")
+    if rewritable_false:
+        return answer("critique_complete", "This entry is not rewritten; the improvement record is the output.")
+    if loop and state.get("decision") in ("not_yet", "no") and state.get("can_revise", False):
+        if version is not None and version >= THRESHOLDS["max_versions"]:
+            return answer("version_limit", "The version cap is reached; start a new slug to continue.")
+        return answer("revise", "Loop: revise the entry toward the brief.")
     return answer(
-        "ask_intent",
-        "Choose critique, an agent-written revision, or a decision assessment.",
+        "stop",
+        f"Judged {state.get('decision')}. An explicit revise or judge request continues.",
     )
 
 
@@ -1306,7 +1243,7 @@ def verifier_required(findings):
     )
 
 
-def review_model_coverage(expected_roles, protocol, *, required_roles=AXES):
+def review_model_coverage(expected_roles, protocol, *, required_roles=()):
     """Compare the pre-dispatch role plan with post-dispatch observations."""
     roles = review_model_roles(protocol)
     expected = sequence(
@@ -1369,8 +1306,9 @@ def review_model_coverage(expected_roles, protocol, *, required_roles=AXES):
 OPERATIONS = {
     name: globals()[name]
     for name in (
+        "lens_check",
         "normalize",
-        "verdict",
+        "judgment",
         "acceptance",
         "change_id",
         "gate",

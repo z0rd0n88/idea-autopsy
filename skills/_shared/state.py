@@ -9,7 +9,7 @@ snapshot and update require expected_generation. report/counts append under the
 lock and optionally accept that precondition. Existing snapshots/reports never
 change. An interrupted artifact transaction leaves .transaction.json; all normal
 operations stop until explicit recover validates hashes and completes its intent.
-Legacy import preserves raw state and artifacts without trusting old assessments.
+A ledger written under any other schema version is refused, never migrated.
 
 This is a single-host filesystem ledger. flock coordinates cooperating local
 processes; it is not a distributed branch merge protocol. Never hand-merge JSON.
@@ -27,6 +27,7 @@ import math
 import os
 from pathlib import Path, PurePosixPath
 import re
+import stat
 import sys
 import tempfile
 import uuid
@@ -37,34 +38,25 @@ _POLICY_SPEC = importlib.util.spec_from_file_location(
 policy = importlib.util.module_from_spec(_POLICY_SPEC)
 _POLICY_SPEC.loader.exec_module(policy)
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,79}\Z")
 VERSION = re.compile(r"v[1-9][0-9]*\Z")
 HASH = re.compile(r"[0-9a-f]{64}\Z")
-KINDS = {
-    "stress_test",
-    "revision",
-    "evaluation",
-    "strategy",
-    "validation",
-    "review_copy",
-}
+KINDS = {"judgment", "revision", "ranking", "review_copy"}
 PATCH_FIELDS = {
-    "investment_context",
+    "brief",
+    "rewritable",
+    "lenses",
     "decisions",
     "questions",
     "findings",
-    "experiments",
+    "entries",
 }
 ASSESSMENTS = {"complete", "insufficient_evidence", "incomplete_coverage"}
-CORE_MODEL_ROLES = {
-    "evaluation": policy.AXES,
-    "stress_test": ("A", "B", "C", "verifier"),
-    "strategy": ("product-strategist",),
-}
-VERDICTS = {"Invest", "Proceed with caution", "Pivot", "Skip"}
+DECISIONS = set(policy.LABELS["decision"])
+PROVENANCE = {"user", "elicited", "derived"}
 REQUEST_FIELDS = {
-    "init": {"text", "investment_context"},
+    "init": {"text", "brief", "rewritable", "lenses"},
     "status": set(),
     "snapshot": {"version", "parent_version", "file", "text", "expected_generation"},
     "report": {
@@ -79,7 +71,6 @@ REQUEST_FIELDS = {
     },
     "update": {"patch", "expected_generation"},
     "counts": {"version", "file", "expected_generation"},
-    "import-legacy": {"text", "acknowledge_untrusted"},
     "recover": set(),
 }
 
@@ -158,89 +149,173 @@ def records(value, label):
     return value
 
 
-def validate_findings(value):
-    enums = {
-        "kind": {"contradiction", "missing_evidence", "risk", "question"},
-        "severity": {"Critical", "High", "Medium"},
-        "origin": {"document", "user", "reviewer", "external"},
-        "doc_support": {"supported", "refuted", "not_established"},
-        "external_status": {"not_checked", "verified", "contradicted", "unverifiable"},
-        "confidence": {"high", "medium", "low"},
-        "status": {"active", "refuted", "resolved"},
-        "resolution": {
-            "unresolved",
-            "claim_removed",
-            "scope_changed",
-            "evidence_obtained",
-            "resolved",
-        },
-        "bucket": {
-            "consensus",
-            "unique_real",
-            "unique_unrated",
-            "unique_reach",
-            "speculative",
-            "verdict",
-            "unknown",
-        },
-        "evidence_basis": {"document_logic", "external_fact", "user_report"},
-    }
+def refuse_schema(data):
+    version = data.get("schema_version") if isinstance(data, dict) else None
+    require(
+        version == SCHEMA_VERSION,
+        f"this ledger was written by another Idea Autopsy version (schema {version}); "
+        "it is not migrated. Use a different slug.",
+    )
+
+
+def slugify(name):
+    slug = re.sub(r"[^a-z0-9]+", "-", str(name).lower()).strip("-")[:80].strip("-")
+    require(bool(slug), f"cannot derive a slug from {name!r}")
+    return slug
+
+
+def list_files(directory, *, exclude=()):
+    """Regular top-level files only; symlinks are refused, dotfiles skipped."""
+    base = Path(directory)
+    require(not base.is_symlink() and base.is_dir(), f"not a directory: {directory}")
+    base = base.resolve()
+    skipped = {Path(item).resolve() for item in exclude}
+    found = []
+    for entry in sorted(base.iterdir(), key=lambda item: item.name):
+        if entry.name.startswith("."):
+            continue
+        mode = entry.lstat().st_mode
+        require(not stat.S_ISLNK(mode), f"symlinks are not accepted as entries: {entry}")
+        if not stat.S_ISREG(mode) or entry.resolve() in skipped:
+            continue
+        require(entry.resolve().parent == base, f"entry escapes its directory: {entry}")
+        found.append(entry)
+    return found
+
+
+def _canonical_hash(value):
+    return digest(
+        json.dumps(
+            value, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        ).encode()
+    )
+
+
+def brief_sha256(brief):
+    return _canonical_hash(
+        {key: value for key, value in brief.items() if key != "confirmation"}
+    )
+
+
+def lens_set_sha256(lenses):
+    return _canonical_hash(
+        sorted(
+            [lens["id"], lens["examine"], lens["evidence"], lens["out_of_scope"]]
+            for lens in lenses
+        )
+    )
+
+
+def lens_ids(state):
+    return [lens["id"] for lens in state.get("lenses") or []] or list(
+        policy.FIXED_LENSES
+    )
+
+
+def validate_findings(value, lenses=policy.FIXED_LENSES):
     for finding in records(value, "findings"):
-        for field in ("issue_id", "statement", "severity_reason"):
-            string(finding.get(field), "finding." + field)
-        for field, choices in enums.items():
-            enum(finding.get(field), choices, "finding." + field)
-        for field in ("assumption_ids", "axes"):
-            string_list(finding.get(field), "finding." + field)
-        require(
-            set(finding["axes"]) <= {"critical_thinking", "feasibility", "risk", "roi"},
-            "finding.axes contains an unknown axis",
-        )
-        for field in ("affects_decision", "thesis_breaking"):
+        try:
+            policy.validate_finding(finding, tuple(lenses))
+        except policy.PolicyError as exc:
+            raise StateError(str(exc)) from exc
+
+
+def validate_lenses(value):
+    require(isinstance(value, list), "lenses must be a list")
+    ids = []
+    for lens in value:
+        require(isinstance(lens, dict), "lens must be an object")
+        lens_id = string(lens.get("id"), "lens.id")
+        for field in ("examine", "evidence", "out_of_scope"):
+            require(isinstance(lens.get(field), str), f"lens.{field} must be a string")
+        enum(lens.get("origin"), {"fixed", "generated", "user_edited"}, "lens.origin")
+        if lens["origin"] == "fixed":
+            require(lens_id in policy.FIXED_LENSES, f"unknown fixed lens {lens_id}")
+        else:
             require(
-                type(finding.get(field)) is bool,
-                "finding." + field + " must be boolean",
+                bool(policy.LENS_ID.match(lens_id))
+                and lens_id not in policy.FIXED_LENSES
+                and not lens_id.startswith(policy.RESERVED_PREFIXES),
+                f"invalid generated lens id {lens_id}",
             )
+        ids.append(lens_id)
+    require(len(ids) == len(set(ids)), "lens IDs must be unique")
+    if ids:
         require(
-            "plausibly_resolvable" in finding
-            and (
-                finding["plausibly_resolvable"] is None
-                or type(finding["plausibly_resolvable"]) is bool
-            ),
-            "finding.plausibly_resolvable must be boolean or null",
+            set(policy.FIXED_LENSES) <= set(ids), "lenses must include the fixed three"
         )
+
+
+def validate_brief(brief):
+    require(isinstance(brief, dict), "brief must be an object")
+    if not brief:
+        return
+    string(brief.get("goal"), "brief.goal")
+    ids = []
+    for field in ("requirements", "hypotheses"):
+        require(isinstance(brief.get(field), list), f"brief.{field} must be a list")
+        for item in brief[field]:
+            require(isinstance(item, dict), f"brief.{field} entries must be objects")
+            ids.append(string(item.get("id"), f"brief.{field}.id"))
+            string(item.get("text"), f"brief.{field}.text")
+            enum(item.get("provenance"), PROVENANCE, f"brief.{field}.provenance")
+    require(len(ids) == len(set(ids)), "brief requirement IDs must be unique")
+    for field in ("constraints", "standard"):
+        require(isinstance(brief.get(field), str), f"brief.{field} must be a string")
+    provenance = brief.get("provenance")
+    require(isinstance(provenance, dict), "brief.provenance must be an object")
+    for part in ("goal", "constraints", "standard"):
+        enum(
+            provenance.get(part),
+            PROVENANCE | {"not_stated"},
+            f"brief.provenance.{part}",
+        )
+    for field in ("goal_provisional", "weakly_supported"):
+        require(type(brief.get(field)) is bool, f"brief.{field} must be boolean")
+    require(
+        isinstance(brief.get("example_hashes"), list),
+        "brief.example_hashes must be a list",
+    )
+    confirmation = brief.get("confirmation")
+    if confirmation is not None:
+        require(isinstance(confirmation, dict), "brief.confirmation must be an object")
+        string(confirmation.get("decision_id"), "brief.confirmation.decision_id")
         require(
-            isinstance(finding.get("sources"), list), "finding.sources must be a list"
+            confirmation.get("brief_sha256") == brief_sha256(brief),
+            "brief.confirmation must match the brief it confirms",
         )
-        for source in finding["sources"]:
-            require(isinstance(source, dict), "finding source must be an object")
-            enum(
-                source.get("type"),
-                {"document", "user", "external", "calculation", "critique"},
-                "finding source.type",
-            )
-            for field in ("type", "ref", "quote"):
-                string(source.get(field), f"finding source.{field}")
-        if "member_ids" in finding:
-            string_list(finding["member_ids"], "finding.member_ids")
-            require(
-                finding["id"] in finding["member_ids"],
-                "finding.member_ids must contain its id",
-            )
-        require(
-            not (
-                finding["status"] == "resolved"
-                and finding["resolution"] in {"claim_removed", "unresolved"}
-            ),
-            "removing a claim or leaving a risk unresolved cannot resolve a finding",
-        )
+
+
+def validate_rewritable(value):
+    if value is None:
+        return
+    require(isinstance(value, dict), "rewritable must be an object or null")
+    require(type(value.get("value")) is bool, "rewritable.value must be boolean")
+    enum(
+        value.get("decided_by"),
+        {"default", "flag", "user", "rank"},
+        "rewritable.decided_by",
+    )
+
+
+def validate_entries(value):
+    require(isinstance(value, list), "entries must be a list")
+    slugs = []
+    for entry in value:
+        require(isinstance(entry, dict), "entries must be objects")
+        slugs.append(string(entry.get("slug"), "entries.slug"))
+        require(bool(NAME.fullmatch(entry["slug"])), "entries.slug must be a valid slug")
+        for field in ("version_sha256", "brief_sha256", "lens_set_sha256"):
+            hash_value(entry.get(field), f"entries.{field}")
+        string(entry.get("judgment_report_id"), "entries.judgment_report_id")
+    require(len(slugs) == len(set(slugs)), "entries slugs must be unique")
 
 
 def validate_working_fields(state):
-    require(
-        isinstance(state.get("investment_context"), dict),
-        "investment_context must be an object",
-    )
+    validate_brief(state.get("brief"))
+    validate_rewritable(state.get("rewritable"))
+    validate_lenses(state.get("lenses"))
+    validate_entries(state.get("entries"))
     for decision in records(state.get("decisions"), "decisions"):
         hash_value(decision.get("change_id"), "decision.change_id")
         string(decision.get("choice"), "decision.choice")
@@ -259,14 +334,7 @@ def validate_working_fields(state):
                 question.get("answer") is None,
                 "pending question cannot already contain an answer",
             )
-    for experiment in records(state.get("experiments"), "experiments"):
-        string(experiment.get("hypothesis"), "experiment.hypothesis")
-        enum(
-            experiment.get("status"),
-            {"proposed", "approved", "running", "complete", "failed"},
-            "experiment.status",
-        )
-    validate_findings(state.get("findings"))
+    validate_findings(state.get("findings"), lens_ids(state))
 
 
 def relative_path(value):
@@ -304,11 +372,7 @@ def owned_path(root, relative, allow_recovery_link=False):
 
 def validate_state(state):
     require(isinstance(state, dict), "state must be an object")
-    require(
-        type(state.get("schema_version")) is int
-        and state["schema_version"] == SCHEMA_VERSION,
-        "legacy/unknown state schema; use explicit import-legacy, never silently migrate",
-    )
+    refuse_schema(state)
     json_value(state, "state")
     require(
         isinstance(state.get("slug"), str) and NAME.fullmatch(state["slug"]),
@@ -375,19 +439,27 @@ def validate_state(state):
     for report in reports:
         validate_artifact(report)
         enum(report.get("kind"), KINDS, "report.kind")
-        require(
-            report.get("version") in versions,
-            "report.version must reference a snapshot",
-        )
-        require(
-            report.get("input_sha256") == versions[report["version"]]["sha256"],
-            "report input hash must match its version",
-        )
-        require(
-            report["path"]
-            == f"reports/{report['version']}-{report['kind']}-{report['id']}.md",
-            "report path does not match its identity",
-        )
+        if report.get("version") is None:
+            require(report["kind"] == "ranking", "only a ranking report has no version")
+            hash_value(report.get("input_sha256"), "report.input_sha256")
+            require(
+                report["path"] == f"reports/ranking-{report['id']}.md",
+                "report path does not match its identity",
+            )
+        else:
+            require(
+                report.get("version") in versions,
+                "report.version must reference a snapshot",
+            )
+            require(
+                report.get("input_sha256") == versions[report["version"]]["sha256"],
+                "report input hash must match its version",
+            )
+            require(
+                report["path"]
+                == f"reports/{report['version']}-{report['kind']}-{report['id']}.md",
+                "report path does not match its identity",
+            )
         string_list(report.get("input_report_ids"), "report.input_report_ids")
         require(
             set(report["input_report_ids"]) <= seen_ids,
@@ -446,42 +518,32 @@ def validate_artifact(artifact):
     string(artifact.get("created_at"), "artifact.created_at")
 
 
-def validate_result(result, *, new_report=False, report_kind=None):
-    if new_report and report_kind in CORE_MODEL_ROLES:
-        require(
-            "assessment_status" in result,
-            "new judgment report requires assessment_status",
+def _model_gaps(result, required_roles):
+    try:
+        coverage = policy.review_model_coverage(
+            result.get("expected_model_roles"),
+            result.get("review_protocol"),
+            required_roles=required_roles,
         )
-        require(
-            "expected_model_roles" in result,
-            "new judgment report requires expected model role plan",
-        )
-        require(
-            isinstance(result.get("review_protocol"), dict)
-            and "roles" in result["review_protocol"],
-            "new judgment report requires review_protocol.roles",
-        )
+    except policy.PolicyError as exc:
+        raise StateError(str(exc)) from exc
+    return coverage["review_role_gaps"] + coverage["model_policy_gaps"]
+
+
+def validate_result(result, *, new_report=False, report_kind=None, state=None):
     if "assessment_status" in result:
         enum(result["assessment_status"], ASSESSMENTS, "assessment_status")
-    if result.get("verdict") is not None:
-        enum(result["verdict"], VERDICTS, "verdict")
+    if "decision" in result:
+        enum(result["decision"], DECISIONS, "decision")
         require(
-            result.get("assessment_status") == "complete",
-            "a verdict requires a complete assessment",
+            result["decision"] == "cannot_judge"
+            or result.get("assessment_status") == "complete",
+            "a decision requires a complete assessment",
         )
     if "findings" in result:
-        validate_findings(result["findings"])
-    if (
-        new_report
-        and report_kind == "evaluation"
-        and result.get("assessment_status") == "complete"
-    ):
-        require(
-            "findings" in result,
-            "new complete evaluation requires findings for verifier coverage",
+        validate_findings(
+            result["findings"], result.get("lenses") or policy.FIXED_LENSES
         )
-    # Older immutable reports have no pre-dispatch plan and may contain role
-    # statuses computed under earlier alias rules. Read them as history.
     if "review_protocol" in result and (new_report or "expected_model_roles" in result):
         try:
             roles = policy.review_model_roles(result["review_protocol"])
@@ -490,41 +552,82 @@ def validate_result(result, *, new_report=False, report_kind=None):
         if any(role["mandatory"] and not role["policy_compliant"] for role in roles):
             require(
                 result.get("assessment_status") in (None, "incomplete_coverage")
-                and result.get("verdict") is None,
-                "mandatory model gap requires incomplete coverage and no verdict",
+                and result.get("decision", "cannot_judge") == "cannot_judge",
+                "mandatory model gap requires incomplete coverage and no decision",
             )
-    model_metadata = "expected_model_roles" in result or "review_protocol" in result
-    if new_report and (
-        result.get("verdict") is not None
-        or (
-            report_kind in CORE_MODEL_ROLES
-            and (result.get("assessment_status") is not None or model_metadata)
+    if not new_report:
+        return
+    if report_kind == "judgment":
+        for field in (
+            "assessment_status",
+            "expected_model_roles",
+            "decision",
+            "lenses",
+            "brief_sha256",
+            "lens_set_sha256",
+        ):
+            require(field in result, f"new judgment report requires {field}")
+        require(
+            isinstance(result.get("review_protocol"), dict)
+            and "roles" in result["review_protocol"],
+            "new judgment report requires review_protocol.roles",
         )
-    ):
-        required_roles = set(CORE_MODEL_ROLES.get(report_kind, ()))
-        if report_kind == "evaluation" and policy.verifier_required(
+        require(
+            result["assessment_status"] != "complete" or "findings" in result,
+            "new complete judgment report requires findings",
+        )
+        if state is not None:
+            require(
+                set(result["lenses"]) == set(lens_ids(state)),
+                "judgment lenses must equal the ledger's stored lens panel",
+            )
+            require(
+                result["brief_sha256"] == brief_sha256(state["brief"]),
+                "judgment brief_sha256 does not match the ledger's brief",
+            )
+            if state.get("lenses"):
+                require(
+                    result["lens_set_sha256"] == lens_set_sha256(state["lenses"]),
+                    "judgment lens_set_sha256 does not match the ledger's lenses",
+                )
+        required = set(result["lenses"])
+        if result["decision"] != "cannot_judge" or policy.verifier_required(
             result.get("findings", [])
         ):
-            required_roles.add("verifier")
-        if result.get("verdict") is not None:
-            required_roles.update(policy.AXES)
-        try:
-            coverage = policy.review_model_coverage(
-                result.get("expected_model_roles"),
-                result.get("review_protocol"),
-                required_roles=required_roles,
-            )
-        except policy.PolicyError as exc:
-            raise StateError(str(exc)) from exc
+            required.add("verifier")
+        gaps = _model_gaps(result, required)
         require(
-            not (coverage["review_role_gaps"] or coverage["model_policy_gaps"])
+            not gaps
             or (
-                result.get("assessment_status") == "incomplete_coverage"
-                and result.get("verdict") is None
+                result["assessment_status"] == "incomplete_coverage"
+                and result["decision"] == "cannot_judge"
             ),
-            "expected model role or policy gaps require incomplete coverage and no verdict: "
-            + ", ".join(coverage["review_role_gaps"] + coverage["model_policy_gaps"]),
+            "expected model role or policy gaps require incomplete coverage and no decision: "
+            + ", ".join(gaps),
         )
+    elif report_kind == "ranking":
+        require(
+            "assessment_status" not in result,
+            "a ranking report has no assessment_status",
+        )
+        for field in ("ranked", "unranked", "ties", "tiebreaks", "entries", "brief_sha256"):
+            require(field in result, f"new ranking report requires {field}")
+        require(
+            isinstance(result.get("review_protocol"), dict)
+            and "roles" in result["review_protocol"],
+            "new ranking report requires review_protocol.roles",
+        )
+        if state is not None:
+            require(
+                result["brief_sha256"] == brief_sha256(state["brief"]),
+                "ranking brief_sha256 does not match the ledger's brief",
+            )
+        tiebreaks = result["tiebreaks"]
+        require(isinstance(tiebreaks, list), "tiebreaks must be a list")
+        gaps = _model_gaps(
+            result, {f"tiebreak-{n}" for n in range(1, len(tiebreaks) + 1)}
+        )
+        require(not gaps, "tiebreak roles were not observed: " + ", ".join(gaps))
 
 
 def canonical_root(request):
@@ -540,6 +643,7 @@ def canonical_root(request):
     key = "source" if "source" in request else "project_dir"
     raw = Path(string(request[key], key))
     require(raw.is_absolute(), f"{key} must be an absolute path")
+    require(not raw.is_symlink(), f"{key} must not be a symlink: {raw}")
     path = raw.resolve(strict=True)
     if key == "source":
         require(path.is_file(), "source must be a file")
@@ -677,11 +781,13 @@ def _fresh(slug, source_path=None):
         "versions": {},
         "reports": [],
         "word_counts": {},
-        "investment_context": {},
+        "brief": {},
+        "rewritable": None,
+        "lenses": [],
+        "entries": [],
         "decisions": [],
         "questions": [],
         "findings": [],
-        "experiments": [],
         "history": [],
     }
 
@@ -828,54 +934,95 @@ def _finish(root, journal):
     return state
 
 
-def _legacy(root, request):
-    state_path = owned_path(root, "state.json")
+def _check_ranking(root, result):
+    """Re-read every cited judgment and compare it with the ranking row."""
+    rows = result["ranked"] + result["unranked"]
+    for slug in [entry["slug"] for entry in result["entries"]] + [
+        row.get("entry") for row in rows
+    ]:
+        require(
+            isinstance(slug, str) and bool(NAME.fullmatch(slug)),
+            f"ranking entry slug is not a valid slug: {slug}",
+        )
+    entries = {entry["slug"]: entry for entry in result["entries"]}
+    for row in rows:
+        slug = row["entry"]
+        require(slug in entries, f"ranking row cites an unknown entry {slug}")
     require(
-        state_path.is_file(), "import-legacy requires an existing legacy state.json"
+        {row["entry"] for row in rows} == set(entries),
+        "every ranking entry needs a ranked or unranked row",
     )
-    raw = state_path.read_bytes()
-    legacy = json.loads(raw.decode("utf-8"))
-    require(
-        isinstance(legacy, dict) and legacy.get("schema_version") != SCHEMA_VERSION,
-        "state is not a legacy object",
-    )
-    require(
-        request.get("acknowledge_untrusted") is True,
-        "import-legacy requires acknowledge_untrusted:true",
-    )
-    state = _fresh(
-        root.name,
-        str(Path(request["source"]).resolve()) if "source" in request else None,
-    )
-    stamp = _now()
-    backup = {
-        "path": f"legacy/state-{uuid.uuid4().hex}.json",
-        "sha256": digest(raw),
-        "created_at": stamp,
+    for row in rows:
+        slug = row["entry"]
+        entry_root = root.parent / slug
+        require(
+            entry_root.resolve().parent == root.parent.resolve(),
+            f"ranking entry slug escapes the ledger directory: {slug}",
+        )
+        require(entry_root.is_dir(), f"entry ledger is missing: {slug}")
+        entry_state = _load(entry_root)
+        matches = [
+            report
+            for report in entry_state["reports"]
+            if report["id"] == entries[slug]["judgment_report_id"]
+            and report["kind"] == "judgment"
+        ]
+        require(len(matches) == 1, f"judgment report not found for {slug}")
+        judged = matches[0]["result"]
+        for field, cited in (
+            ("brief_sha256", judged["brief_sha256"]),
+            ("lens_set_sha256", judged["lens_set_sha256"]),
+            ("version_sha256", matches[0]["input_sha256"]),
+        ):
+            require(
+                entries[slug].get(field) == cited,
+                f"ranking entry {field} for {slug} does not match its judgment",
+            )
+        expected = {
+            "decision": judged["decision"],
+            "fit": judged["fit"],
+            "feasibility": judged["feasibility"],
+            "quality": judged["quality"],
+            "critical_count": len(judged.get("critical_issue_ids", [])),
+            "high_count": len(judged.get("high_issue_ids", [])),
+        }
+        actual = {key: row.get(key) for key in expected}
+        require(
+            actual == expected, f"ranking row for {slug} does not match its judgment"
+        )
+
+
+def _response(root, state, **extra):
+    """Ledger facts a skill passes through untouched instead of recomputing."""
+    brief = state.get("brief") or {}
+    return {
+        "root": str(root),
+        "state": state,
+        "brief_sha256": brief_sha256(brief),
+        "lens_set_sha256": lens_set_sha256(state.get("lenses") or []),
+        "requirement_ids": [item["id"] for item in brief.get("requirements", [])],
+        **extra,
     }
-    state["legacy_backups"] = [backup]
-    files = [(backup["path"], raw)]
-    # Caller selects source explicitly; legacy current_version/verdict/counts are
-    # not reliable enough to promote. Existing loose artifacts remain untouched.
-    if "source" in request:
-        files.append(_snapshot(state, "v1", Path(request["source"]).read_bytes(), None))
-    elif "text" in request:
-        files.append(_snapshot(state, "v1", _bytes({"text": request["text"]}), None))
-    _advance(
-        state,
-        "import-legacy",
-        {
-            "backup": backup["path"],
-            "trusted": False,
-            "note": "Legacy context, findings, counts and verdicts require explicit revalidation.",
-        },
-    )
-    return state, files, raw
 
 
 def execute(operation, request):
     require(isinstance(request, dict), "request must be a JSON object")
     json_value(request, "request")
+    if operation == "list-files":
+        require(
+            set(request) <= {"directory", "exclude"},
+            f"unknown list-files request fields: {sorted(set(request) - {'directory', 'exclude'})}",
+        )
+        directory = Path(string(request.get("directory"), "directory"))
+        require(directory.is_absolute(), "directory must be an absolute path")
+        exclude = request.get("exclude", [])
+        string_list(exclude, "exclude")
+        return {
+            "files": [
+                {"path": str(path), "slug": slugify(path.stem)}
+                for path in list_files(directory, exclude=exclude)
+            ]
+        }
     enum(
         operation,
         {
@@ -885,7 +1032,6 @@ def execute(operation, request):
             "report",
             "update",
             "counts",
-            "import-legacy",
             "recover",
         },
         "operation",
@@ -899,12 +1045,12 @@ def execute(operation, request):
     if operation == "init":
         root.mkdir(parents=True, exist_ok=True)
     require(root.is_dir(), "state directory is not initialized; run init explicitly")
+    existing = owned_path(root, "state.json")
+    if existing.is_file():
+        refuse_schema(_read(existing))
     lock_path = owned_path(root, ".lock")
     if operation == "status":
-        require(
-            lock_path.is_file(),
-            "state lock is missing; legacy state requires explicit import-legacy; status creates no files",
-        )
+        require(lock_path.is_file(), "state lock is missing; status creates no files")
     descriptor = os.open(
         lock_path,
         os.O_NOFOLLOW
@@ -924,7 +1070,7 @@ def execute(operation, request):
                 journal = _read(journal_path)
                 require(isinstance(journal, dict), "transaction must be an object")
                 _check_source(root, validate_state(journal.get("state")), request)
-                return {"root": str(root), "state": _finish(root, journal)}
+                return _response(root, _finish(root, journal))
             require(
                 not journal_path.exists(),
                 "pending transaction detected; run recover explicitly before continuing",
@@ -933,7 +1079,7 @@ def execute(operation, request):
             if operation == "init":
                 require(
                     not state_path.exists(),
-                    "state already exists; use status or explicit import-legacy",
+                    "state already exists; use status",
                 )
                 state = _fresh(
                     root.name,
@@ -941,9 +1087,12 @@ def execute(operation, request):
                     if "source" in request
                     else None,
                 )
-                state["investment_context"] = copy.deepcopy(
-                    request.get("investment_context", {})
-                )
+                for field, default in (
+                    ("brief", {}),
+                    ("rewritable", None),
+                    ("lenses", []),
+                ):
+                    state[field] = copy.deepcopy(request.get(field, default))
                 files = []
                 if "source" in request:
                     require(
@@ -957,17 +1106,9 @@ def execute(operation, request):
                     files.append(
                         _snapshot(state, "v1", _bytes({"text": request["text"]}), None)
                     )
-                _advance(
-                    state,
-                    "init",
-                    {"investment_context": copy.deepcopy(state["investment_context"])},
-                )
+                _advance(state, "init", {"brief_sha256": brief_sha256(state["brief"])})
                 _commit(root, state, files, None)
-                return {"root": str(root), "state": state}
-            if operation == "import-legacy":
-                state, files, previous_raw = _legacy(root, request)
-                _commit(root, state, files, previous_raw)
-                return {"root": str(root), "state": state}
+                return _response(root, state)
             state = _load(root)
             _check_source(root, state, request)
             if operation == "status":
@@ -981,7 +1122,7 @@ def execute(operation, request):
                         != state["source"]["sha256"]
                     )
                 )
-                return {"root": str(root), "state": state, "source_changed": changed}
+                return _response(root, state, source_changed=changed)
             if operation in {"snapshot", "update"}:
                 require(
                     "expected_generation" in request,
@@ -1009,30 +1150,40 @@ def execute(operation, request):
                     state["source"]["sha256"] = state["versions"][version]["sha256"]
             elif operation == "report":
                 version, kind = request.get("version"), request.get("kind")
-                require(
-                    version in state["versions"],
-                    "report version must reference an immutable snapshot",
-                )
                 enum(kind, KINDS, "report.kind")
+                result = copy.deepcopy(request.get("result", {}))
+                require(isinstance(result, dict), "report.result must be an object")
+                data, report_id = _bytes(request), uuid.uuid4().hex
+                if kind == "ranking":
+                    require(version is None, "a ranking report takes no version")
+                    hash_value(result.get("brief_sha256"), "ranking brief_sha256")
+                    input_sha = result["brief_sha256"]
+                    relative = f"reports/ranking-{report_id}.md"
+                else:
+                    require(
+                        version in state["versions"],
+                        "report version must reference an immutable snapshot",
+                    )
+                    input_sha = state["versions"][version]["sha256"]
+                    relative = f"reports/{version}-{kind}-{report_id}.md"
                 if "input_sha256" in request:
                     require(
-                        request["input_sha256"] == state["versions"][version]["sha256"],
-                        "stale report input hash",
+                        request["input_sha256"] == input_sha, "stale report input hash"
                     )
-                data, report_id = _bytes(request), uuid.uuid4().hex
-                relative = f"reports/{version}-{kind}-{report_id}.md"
                 report = {
                     "id": report_id,
                     "kind": kind,
                     "version": version,
                     "path": relative,
                     "sha256": digest(data),
-                    "input_sha256": state["versions"][version]["sha256"],
+                    "input_sha256": input_sha,
                     "created_at": _now(),
                     "input_report_ids": request.get("input_report_ids", []),
-                    "result": copy.deepcopy(request.get("result", {})),
+                    "result": result,
                 }
-                validate_result(report["result"], new_report=True, report_kind=kind)
+                validate_result(result, new_report=True, report_kind=kind, state=state)
+                if kind == "ranking":
+                    _check_ranking(root, result)
                 state["reports"].append(report)
                 files.append((relative, data))
                 details["report_id"] = report_id
@@ -1040,8 +1191,31 @@ def execute(operation, request):
                 patch = request.get("patch")
                 require(
                     isinstance(patch, dict) and patch and set(patch) <= PATCH_FIELDS,
-                    "patch must contain only investment_context, decisions, questions, findings, experiments",
+                    "patch may contain only " + ", ".join(sorted(PATCH_FIELDS)),
                 )
+                judged = any(r["kind"] == "judgment" for r in state["reports"])
+                if "brief" in patch:
+                    require(
+                        not judged and not state["brief"].get("confirmation"),
+                        "the brief is fixed for this slug; start a new slug",
+                    )
+                if "lenses" in patch and judged:
+                    old = {lens["id"]: lens for lens in state["lenses"]}
+                    new = patch["lenses"]
+                    require(
+                        isinstance(new, list)
+                        and all(isinstance(lens, dict) for lens in new)
+                        and {lens.get("id") for lens in new} == set(old),
+                        "after a judgment the lens panel keeps the same lens IDs",
+                    )
+                    require(
+                        all(
+                            lens == old[lens["id"]]
+                            or lens.get("origin") == "user_edited"
+                            for lens in new
+                        ),
+                        "after a judgment a changed lens must have origin user_edited",
+                    )
                 details["changes"] = {
                     field: {
                         "before": copy.deepcopy(state[field]),
@@ -1072,7 +1246,7 @@ def execute(operation, request):
                 details["version"] = version
             _advance(state, operation, details)
             _commit(root, state, files, state_path.read_bytes())
-            return {"root": str(root), "state": state}
+            return _response(root, state)
     except OSError:
         # The OS releases flock when the descriptor/context closes. Durable
         # journals remain intact for explicit recovery after publication failures.
@@ -1090,8 +1264,8 @@ def main(argv=None):
             "report",
             "update",
             "counts",
-            "import-legacy",
             "recover",
+            "list-files",
         ],
     )
     parser.add_argument(
