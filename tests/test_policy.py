@@ -701,6 +701,66 @@ class FindingSchemaTests(unittest.TestCase):
             policy.execute("normalize", {"markdown": "## Findings\n- x"})
 
 
+def lens(lens_id, origin="generated", **changes):
+    return {
+        "id": lens_id,
+        "examine": f"How the entry handles {lens_id}",
+        "evidence": "Named passages in the entry",
+        "out_of_scope": "",
+        "origin": origin,
+        **changes,
+    }
+
+
+class LensCheckTests(unittest.TestCase):
+    BRIEF = "Goal: a two-minute demo. R1 runs offline. Standard: last year's winners."
+
+    def check(self, lenses, text=BRIEF):
+        return policy.execute("lens_check", {"lenses": lenses, "requirement_text": text})
+
+    def test_generated_lens_ids_cannot_collide_with_fixed_or_reserved(self):
+        for bad in ("fit", "quality", "verifier", "tiebreak-1", "fact-checker-x", "derive2", "X", "a", "a_b"):
+            with self.subTest(lens_id=bad):
+                result = self.check([lens(bad)])
+                self.assertEqual([], result["lenses"])
+                self.assertEqual([bad], [r["id"] for r in result["rejected"]])
+        result = self.check([lens("story-arc"), lens("story-arc", "user_edited")])
+        self.assertEqual(["story-arc"], [l["id"] for l in result["lenses"]])
+        self.assertRegex(result["rejected"][0]["reason"], "unique")
+
+    def test_cap_counts_generated_and_user_edited(self):
+        lenses = [lens("a1"), lens("b2", "user_edited"), lens("c3"), lens("d4", "user_edited")]
+        result = self.check(lenses)
+        self.assertEqual(["a1", "b2", "c3"], [l["id"] for l in result["lenses"]])
+        self.assertEqual("d4", result["rejected"][0]["id"])
+        self.assertRegex(result["rejected"][0]["reason"], "three")
+
+    def test_business_terms_use_word_boundaries(self):
+        heroic = lens("tone", examine="Heroic framing of the pitch")
+        roi = lens("payoff", examine="ROI the user can expect")
+        sales = lens("pitch", evidence="Sales passages in the entry")
+        self.assertEqual(["tone"], [l["id"] for l in self.check([heroic])["lenses"]])
+        self.assertEqual(["payoff"], [r["id"] for r in self.check([roi])["rejected"]])
+        self.assertEqual(["pitch"], [r["id"] for r in self.check([sales])["rejected"]])
+        self.assertEqual(["pitch"], [l["id"] for l in self.check([sales], "R1 covers sales training")["lenses"]])
+        self.assertEqual(["roi"], [l["id"] for l in self.check([lens("roi", examine="Stories about Roi")])["lenses"]])
+
+    def test_rejected_lenses_are_returned_not_dropped(self):
+        request = {
+            "lenses": [lens("good"), lens("bad", examine=" "), lens("long", evidence="x" * 601), lens("fixed-one", "fixed")],
+            "requirement_text": self.BRIEF,
+        }
+        before = deepcopy(request)
+        result = policy.execute("lens_check", request)
+        self.assertEqual(before, request)
+        self.assertEqual([request["lenses"][0]], result["lenses"])
+        self.assertEqual(["bad", "long", "fixed-one"], [r["id"] for r in result["rejected"]])
+        for rejected in result["rejected"]:
+            self.assertTrue(rejected["reason"])
+        with self.assertRaisesRegex(policy.PolicyError, "must be an object"):
+            self.check(["good"])
+
+
 class NormalizationTests(unittest.TestCase):
     def test_causal_deduplication_keeps_members(self):
         result = policy.execute(

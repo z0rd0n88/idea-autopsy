@@ -19,6 +19,22 @@ from pathlib import Path
 FIXED_LENSES = ("fit", "feasibility", "quality")
 RESERVED_PREFIXES = ("verifier", "derive", "tiebreak", "fact-checker")
 LENS_ID = re.compile(r"[a-z][a-z0-9-]{1,31}\Z")
+MAX_LENS_TEXT = 600
+MAX_GENERATED_LENSES = 3
+BUSINESS_TERMS = (re.compile(r"\bROI\b"),) + tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        r"\bmarket(s|ing)?\b",
+        r"\bpric(e|es|ing)\b",
+        r"\brevenue\b",
+        r"\bmoneti[sz](e|ation)\b",
+        r"\bprofit(s|able|ability)?\b",
+        r"\bcustomer acquisition\b",
+        r"\bbusiness value\b",
+        r"\bsales\b",
+        r"\bwillingness to pay\b",
+    )
+)
 LABELS = {
     "fit": ("meets", "partly_meets", "does_not_meet", "cannot_judge"),
     "feasibility": (
@@ -179,6 +195,52 @@ def unique(items):
             result.append(item)
             seen.add(key)
     return result
+
+
+def _lens_rejection(lens, seen, accepted, requirement_text):
+    lens_id = lens["id"]
+    if not LENS_ID.match(lens_id):
+        return "lens id must match [a-z][a-z0-9-]{1,31}"
+    if lens_id in FIXED_LENSES:
+        return "lens id collides with a fixed lens"
+    if lens_id.startswith(RESERVED_PREFIXES):
+        return "lens id starts with a reserved role prefix"
+    if lens_id in seen:
+        return "lens id must be unique"
+    if lens.get("origin") not in ("generated", "user_edited"):
+        return "lens origin must be generated or user_edited"
+    for field in ("examine", "evidence"):
+        text = lens.get(field)
+        if not isinstance(text, str) or not text.strip():
+            return f"lens {field} must be a nonempty string"
+        if len(text) > MAX_LENS_TEXT:
+            return f"lens {field} exceeds {MAX_LENS_TEXT} characters"
+    if not isinstance(lens.get("out_of_scope"), str):
+        return "lens out_of_scope must be a string"
+    for pattern in BUSINESS_TERMS:
+        if (pattern.search(lens["examine"]) or pattern.search(lens["evidence"])) and not pattern.search(
+            requirement_text
+        ):
+            return f"lens uses a business term the brief does not: {pattern.pattern}"
+    if len(accepted) >= MAX_GENERATED_LENSES:
+        return "at most three generated or user-edited lenses"
+    return None
+
+
+def lens_check(request):
+    """Validate non-fixed lenses; rejections are returned with reasons, never dropped."""
+    requirement_text = nonempty(request.get("requirement_text"), "requirement_text")
+    accepted, rejected, seen = [], [], set()
+    for lens in sequence(request.get("lenses"), "lenses"):
+        obj(lens, "lens")
+        lens_id = nonempty(lens.get("id"), "lens.id")
+        reason = _lens_rejection(lens, seen, accepted, requirement_text)
+        seen.add(lens_id)
+        if reason:
+            rejected.append({"id": lens_id, "reason": reason})
+        else:
+            accepted.append(deepcopy(lens))
+    return {"lenses": accepted, "rejected": rejected}
 
 
 def normalize(request):
@@ -1244,6 +1306,7 @@ def review_model_coverage(expected_roles, protocol, *, required_roles=()):
 OPERATIONS = {
     name: globals()[name]
     for name in (
+        "lens_check",
         "normalize",
         "judgment",
         "acceptance",
