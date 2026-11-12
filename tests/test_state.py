@@ -577,7 +577,7 @@ class StateTests(unittest.TestCase):
         self.assertEqual({}, ledger["versions"])
         self.assertIsNone(state.execute("status", request)["state"]["current_version"])
 
-    def test_ranking_report_saves_without_version_and_checks_cited_reports(self):
+    def ranking_setup(self):
         brief = confirmed(make_brief())
         entry = self.project / "a.md"
         entry.write_text("Entry A")
@@ -621,6 +621,10 @@ class StateTests(unittest.TestCase):
             "expected_model_roles": [],
             "review_protocol": {"roles": []},
         }
+        return brief_request, row, ranking
+
+    def test_ranking_report_saves_without_version_and_checks_cited_reports(self):
+        brief_request, row, ranking = self.ranking_setup()
         for changes, message in (
             ({"ranked": [dict(row, decision="no")]}, "does not match its judgment"),
             (
@@ -643,6 +647,35 @@ class StateTests(unittest.TestCase):
         )["state"]["reports"][-1]
         self.assertIsNone(saved["version"])
         self.assertEqual(f"reports/ranking-{saved['id']}.md", saved["path"])
+
+    def test_ranking_rejects_traversal_slugs_and_unbound_hashes(self):
+        brief_request, row, ranking = self.ranking_setup()
+        entry = ranking["entries"][0]
+        other = "0" * 64
+        real_load = state._load
+
+        def brief_ledger_only(root):
+            if root.name != brief_request["slug"]:
+                raise AssertionError(f"read an entry ledger before the slug check: {root}")
+            return real_load(root)
+
+        for changes, message, no_read in (
+            ({"entries": [dict(entry, slug="../a")]}, "ranking entry slug", True),
+            ({"ranked": [dict(row, entry="a/b")]}, "ranking entry slug", True),
+            ({"entries": [dict(entry, brief_sha256=other)]}, "does not match its judgment", False),
+            ({"entries": [dict(entry, lens_set_sha256=other)]}, "does not match its judgment", False),
+            ({"entries": [dict(entry, version_sha256=other)]}, "does not match its judgment", False),
+            ({"entries": []}, "", False),
+            ({"ranked": []}, "", False),
+        ):
+            with self.subTest(message=message or changes):
+                load = brief_ledger_only if no_read else real_load
+                with mock.patch.object(state, "_load", side_effect=load):
+                    with self.assertRaisesRegex(state.StateError, message):
+                        state.execute(
+                            "report",
+                            {**brief_request, "kind": "ranking", "text": "R", "result": {**ranking, **changes}},
+                        )
 
     def test_responses_carry_ledger_hashes_and_requirement_ids(self):
         brief = make_brief(requirements=("Runs offline", "Under two minutes"))

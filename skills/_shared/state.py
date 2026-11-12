@@ -936,22 +936,48 @@ def _finish(root, journal):
 
 def _check_ranking(root, result):
     """Re-read every cited judgment and compare it with the ranking row."""
-    report_ids = {
-        entry["slug"]: entry["judgment_report_id"] for entry in result["entries"]
-    }
-    for row in result["ranked"] + result["unranked"]:
-        slug = row.get("entry")
-        require(slug in report_ids, f"ranking row cites an unknown entry {slug}")
+    rows = result["ranked"] + result["unranked"]
+    for slug in [entry["slug"] for entry in result["entries"]] + [
+        row.get("entry") for row in rows
+    ]:
+        require(
+            isinstance(slug, str) and bool(NAME.fullmatch(slug)),
+            f"ranking entry slug is not a valid slug: {slug}",
+        )
+    entries = {entry["slug"]: entry for entry in result["entries"]}
+    for row in rows:
+        slug = row["entry"]
+        require(slug in entries, f"ranking row cites an unknown entry {slug}")
+    require(
+        {row["entry"] for row in rows} == set(entries),
+        "every ranking entry needs a ranked or unranked row",
+    )
+    for row in rows:
+        slug = row["entry"]
         entry_root = root.parent / slug
+        require(
+            entry_root.resolve().parent == root.parent.resolve(),
+            f"ranking entry slug escapes the ledger directory: {slug}",
+        )
         require(entry_root.is_dir(), f"entry ledger is missing: {slug}")
         entry_state = _load(entry_root)
         matches = [
             report
             for report in entry_state["reports"]
-            if report["id"] == report_ids[slug] and report["kind"] == "judgment"
+            if report["id"] == entries[slug]["judgment_report_id"]
+            and report["kind"] == "judgment"
         ]
         require(len(matches) == 1, f"judgment report not found for {slug}")
         judged = matches[0]["result"]
+        for field, cited in (
+            ("brief_sha256", judged["brief_sha256"]),
+            ("lens_set_sha256", judged["lens_set_sha256"]),
+            ("version_sha256", matches[0]["input_sha256"]),
+        ):
+            require(
+                entries[slug].get(field) == cited,
+                f"ranking entry {field} for {slug} does not match its judgment",
+            )
         expected = {
             "decision": judged["decision"],
             "fit": judged["fit"],
