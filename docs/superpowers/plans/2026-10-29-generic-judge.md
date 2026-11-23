@@ -600,7 +600,7 @@ A `lens` reviewer never sees a second entry; only `tiebreak` does.
 ### Task 15: Branch review and merge
 
 - [ ] **Step 1:** `git diff main...HEAD --stat` from the worktree; confirm every changed path traces to a task above.
-- [ ] **Step 2:** Run `zord-multi-agent-review` on the PR (per `code-review.md`), triage findings, fix with `finding-fixer`.
+- [ ] **Step 2:** Run `multi-agent-review` on the PR (per `code-review.md`), triage findings, fix with `finding-fixer`.
 - [ ] **Step 3:** Merge from the primary checkout; remove worktree, local and remote branch; `claude plugin marketplace update idea-autopsy && claude plugin update idea-autopsy@idea-autopsy`; restart.
 
 ## PR grouping
